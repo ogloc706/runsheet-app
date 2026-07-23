@@ -30,7 +30,6 @@ def extract_pdf_text(uploaded_file):
 
 
 def get_mapping_for_pdf(df, pdf_filename, pdf_text):
-    # Detect if CSV has a Territory/Zone column
     territory_col = None
     for col in df.columns:
         if str(col).strip().lower() in ['territory', 'zone', 'area', 'region', 'sheet']:
@@ -44,7 +43,6 @@ def get_mapping_for_pdf(df, pdf_filename, pdf_text):
         matched_t = None
         for t in unique_territories:
             t_str = str(t).strip()
-            # Match territory name inside PDF filename or PDF title header
             if t_str.lower() in pdf_filename.lower() or t_str.lower() in first_line.lower():
                 matched_t = t
                 break
@@ -54,7 +52,6 @@ def get_mapping_for_pdf(df, pdf_filename, pdf_text):
             filtered_df = df[df[territory_col] == matched_t]
             return dict(zip(filtered_df['code'].astype(str).str.strip(), filtered_df['Coding']))
             
-    # Default fallback: match using all rows in CSV
     return dict(zip(df['code'].astype(str).str.strip(), df['Coding']))
 
 
@@ -76,7 +73,6 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
     
-    # Universal site regex: matches codes starting with letters A-H or J-Z (excluding I for Job IDs)
     site_pattern = re.compile(r'\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
     
     for i, line in enumerate(lines):
@@ -152,7 +148,8 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
     clean_title = pdf_filename.replace('.pdf', '')
     story.append(Paragraph(f"{clean_title} (Optimized Route)", title_style))
 
-    job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}\b')
+    # Pattern matches 3-5 uppercase letters + 5-8 digits, regardless of following spaces
+    job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
 
     for b in sorted_blocks:
         block_elements = []
@@ -171,6 +168,11 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
         for line in raw_lines[1:]:
             match = job_id_pattern.match(line)
             if match:
+                job_id = match.group(0)
+                rest = line[len(job_id):]
+                if rest and not rest.startswith(' '):
+                    line = f"{job_id} {rest}"
+
                 if current_job:
                     job_blocks.append(current_job)
                 current_job = [line]
