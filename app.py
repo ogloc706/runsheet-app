@@ -13,19 +13,49 @@ from reportlab.lib import colors
 st.set_page_config(page_title="Run Sheet Route Optimizer", layout="centered")
 
 st.title("🚚 Poster Run Sheet Route Optimizer")
-st.write("Upload your **Territory Route CSV** and your **PDF Instructions** to automatically re-order and format them by route sequence.")
+st.write("Upload your **Master Territory CSV** and your **PDF Run Sheets** to automatically re-order and format them by route sequence.")
 
-st.subheader("1. Upload Route CSV")
-csv_file = st.file_uploader("Choose your Route Plan CSV", type=["csv"])
+st.subheader("1. Upload Master Route CSV")
+csv_file = st.file_uploader("Choose your Master Route Plan CSV", type=["csv"])
 
 st.subheader("2. Upload Weekly PDF Run Sheets")
 pdf_files = st.file_uploader("Choose your PDF run sheet(s)", type=["pdf"], accept_multiple_files=True)
 
 
 def extract_pdf_text(uploaded_file):
+    uploaded_file.seek(0)
     reader = pypdf.PdfReader(io.BytesIO(uploaded_file.read()))
     full_text = "\n".join([page.extract_text() or "" for page in reader.pages])
     return full_text
+
+
+def get_mapping_for_pdf(df, pdf_filename, pdf_text):
+    # Detect if CSV has a Territory/Zone column
+    territory_col = None
+    for col in df.columns:
+        if str(col).strip().lower() in ['territory', 'zone', 'area', 'region', 'sheet']:
+            territory_col = col
+            break
+            
+    if territory_col:
+        first_line = pdf_text.strip().split('\n')[0] if pdf_text else ""
+        unique_territories = df[territory_col].dropna().unique()
+        
+        matched_t = None
+        for t in unique_territories:
+            t_str = str(t).strip()
+            # Match territory name inside PDF filename or PDF title header
+            if t_str.lower() in pdf_filename.lower() or t_str.lower() in first_line.lower():
+                matched_t = t
+                break
+                
+        if matched_t:
+            st.info(f"📍 Matched territory **'{matched_t}'** for `{pdf_filename}`")
+            filtered_df = df[df[territory_col] == matched_t]
+            return dict(zip(filtered_df['code'].astype(str).str.strip(), filtered_df['Coding']))
+            
+    # Default fallback: match using all rows in CSV
+    return dict(zip(df['code'].astype(str).str.strip(), df['Coding']))
 
 
 def find_csv_code(raw_code, csv_mapping):
@@ -46,7 +76,7 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
     
-    # Universal site regex: matches site prefixes (A-H, J-Z) while excluding Job IDs (which start with 'I')
+    # Universal site regex: matches codes starting with letters A-H or J-Z (excluding I for Job IDs)
     site_pattern = re.compile(r'\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
     
     for i, line in enumerate(lines):
@@ -182,18 +212,18 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
 if st.button("🚀 Process & Re-order PDFs", type="primary"):
     if not csv_file:
-        st.error("Please upload your Route CSV file first.")
+        st.error("Please upload your Master Route CSV file first.")
     elif not pdf_files:
         st.error("Please upload at least one PDF file.")
     else:
         with st.spinner("Processing files and optimizing routes..."):
             df = pd.read_csv(csv_file)
-            csv_mapping = dict(zip(df['code'].astype(str).str.strip(), df['Coding']))
             
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w") as zf:
                 for pdf_file in pdf_files:
                     pdf_text = extract_pdf_text(pdf_file)
+                    csv_mapping = get_mapping_for_pdf(df, pdf_file.name, pdf_text)
                     sorted_blocks = parse_and_sort_pdf(pdf_text, csv_mapping)
                     pdf_bytes = generate_reportlab_pdf(sorted_blocks, pdf_file.name)
                     
