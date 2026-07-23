@@ -3,7 +3,7 @@ import pandas as pd
 import re
 import io
 import zipfile
-import pdfplumber
+import pypdf
 
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
@@ -23,8 +23,8 @@ pdf_files = st.file_uploader("Choose your PDF run sheet(s)", type=["pdf"], accep
 
 
 def extract_pdf_text(uploaded_file):
-    with pdfplumber.open(io.BytesIO(uploaded_file.read())) as pdf:
-        full_text = "\n".join([page.extract_text() or "" for page in pdf.pages])
+    reader = pypdf.PdfReader(io.BytesIO(uploaded_file.read()))
+    full_text = "\n".join([page.extract_text() or "" for page in reader.pages])
     return full_text
 
 
@@ -46,8 +46,11 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
     
+    # Universal site regex: matches site prefixes (A-H, J-Z) while excluding Job IDs (which start with 'I')
+    site_pattern = re.compile(r'\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
+    
     for i, line in enumerate(lines):
-        match = re.search(r'\b(AL\d+\s*\([A-Z]+\)|PB\d+\s*\([A-Z\s]+\)|WLG\d+[\d\.]*(?:\s*\([A-Z]+\))?)', line)
+        match = site_pattern.search(line)
         if match:
             headers_found.append((i, line, match.group(1)))
 
