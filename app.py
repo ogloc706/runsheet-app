@@ -47,7 +47,6 @@ def get_mapping_for_pdf(df, pdf_filename, pdf_text):
             territory_identifier = t_str.split()[-1].lower() # e.g. "a", "b", "c", "cbd1"
             
             pdf_norm = re.sub(r'[^a-z0-9]', ' ', pdf_filename.lower())
-            first_norm = re.sub(r'[^a-z0-9]', ' ', first_line.lower())
             
             if (f"wellington {territory_identifier}" in pdf_norm or 
                 f"territory {territory_identifier}" in pdf_norm or 
@@ -83,7 +82,7 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
     
-    # Line-anchored regex: matches site codes at line starts only
+    # Line-anchored regex to match valid site codes at start of line
     line_start_site_pattern = re.compile(r'^(?:\|\s*)?\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
     
     for i, line in enumerate(lines):
@@ -196,6 +195,25 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
     job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
 
+    header_table_style = TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#1E293B')),
+        ('TOPPADDING', (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ('LEFTPADDING', (0,0), (-1,-1), 8),
+        ('RIGHTPADDING', (0,0), (-1,-1), 8),
+    ])
+
+    jobs_table_style = TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F8FAFC')),
+        ('LINEBELOW', (0,0), (-1,0), 1, colors.HexColor('#CBD5E1')),
+        ('LINEBELOW', (0,1), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('LEFTPADDING', (0,0), (-1,-1), 4),
+        ('RIGHTPADDING', (0,0), (-1,-1), 4),
+    ])
+
     for b in sorted_blocks:
         block_text = "\n".join(b['block_lines'])
         raw_lines = [l.strip(" |") for l in block_text.split('\n') if l.strip(" |")]
@@ -207,13 +225,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
         header_table = Table(
             [[Paragraph(site_header_text, site_code_style)]],
             colWidths=[545],
-            style=TableStyle([
-                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#1E293B')),
-                ('TOPPADDING', (0,0), (-1,-1), 5),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-                ('LEFTPADDING', (0,0), (-1,-1), 8),
-                ('RIGHTPADDING', (0,0), (-1,-1), 8),
-            ])
+            style=header_table_style
         )
         story.append(header_table)
 
@@ -286,16 +298,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
             j_table = Table(
                 jobs_table_data,
                 colWidths=[205, 140, 65, 90, 45],
-                style=TableStyle([
-                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F8FAFC')),
-                    ('LINEBELOW', (0,0), (-1,0), 1, colors.HexColor('#CBD5E1')),
-                    ('LINEBELOW', (0,1), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
-                    ('TOPPADDING', (0,0), (-1,-1), 4),
-                    ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-                    ('LEFTPADDING', (0,0), (-1,-1), 4),
-                    ('RIGHTPADDING', (0,0), (-1,-1), 4),
-                ])
+                style=jobs_table_style
             )
             
             story.append(Spacer(1, 4))
