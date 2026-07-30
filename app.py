@@ -6,7 +6,7 @@ import zipfile
 import pypdf
 
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -166,8 +166,8 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
         spaceAfter=10
     )
 
-    site_code_style = ParagraphStyle('SiteCode', fontName='Helvetica-Bold', fontSize=10, leading=12, textColor=colors.white)
-    site_sub_style = ParagraphStyle('SiteSub', fontName='Helvetica-Oblique', fontSize=8.5, leading=11, textColor=colors.HexColor('#475569'))
+    site_code_style = ParagraphStyle('SiteCode', fontName='Helvetica-Bold', fontSize=10, leading=12, textColor=colors.white, keepWithNext=True)
+    site_sub_style = ParagraphStyle('SiteSub', fontName='Helvetica-Oblique', fontSize=8.5, leading=11, textColor=colors.HexColor('#475569'), keepWithNext=True)
     table_header_style = ParagraphStyle('TableHeader', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#475569'))
 
     job_title_style = ParagraphStyle('JobTitle', fontName='Helvetica-Bold', fontSize=8.5, leading=11, textColor=colors.HexColor('#1E293B'))
@@ -187,7 +187,6 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
     job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
 
     for b in sorted_blocks:
-        block_elements = []
         block_text = "\n".join(b['block_lines'])
         raw_lines = [l.strip(" |") for l in block_text.split('\n') if l.strip(" |")]
         if not raw_lines:
@@ -203,7 +202,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
             ('LEFTPADDING', (0,0), (-1,-1), 8),
             ('RIGHTPADDING', (0,0), (-1,-1), 8),
         ]))
-        block_elements.append(header_table)
+        story.append(header_table)
 
         # 2. Extract Sub-headers & Jobs
         sub_headers = []
@@ -232,8 +231,8 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
         if sub_headers:
             sub_str = " | ".join(sub_headers)
-            block_elements.append(Spacer(1, 2))
-            block_elements.append(Paragraph(sub_str, site_sub_style))
+            story.append(Spacer(1, 2))
+            story.append(Paragraph(sub_str, site_sub_style))
 
         # 3. Build 5-Column Table (CAMPAIGN | MEDIA DETAILS | ACTION | SIZE | QTY)
         if job_blocks:
@@ -279,11 +278,10 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
                 ('LEFTPADDING', (0,0), (-1,-1), 4),
                 ('RIGHTPADDING', (0,0), (-1,-1), 4),
             ]))
-            block_elements.append(Spacer(1, 4))
-            block_elements.append(j_table)
+            story.append(Spacer(1, 4))
+            story.append(j_table)
 
-        block_elements.append(Spacer(1, 10))
-        story.append(KeepTogether(block_elements))
+        story.append(Spacer(1, 12))
 
     doc.build(story)
     return buffer.getvalue()
