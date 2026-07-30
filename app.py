@@ -172,7 +172,6 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
     job_title_style = ParagraphStyle('JobTitle', fontName='Helvetica-Bold', fontSize=8.5, leading=11, textColor=colors.HexColor('#1E293B'))
     job_media_style = ParagraphStyle('JobMedia', fontName='Helvetica', fontSize=8, leading=10, textColor=colors.HexColor('#475569'))
-    job_note_style = ParagraphStyle('JobNote', fontName='Helvetica-Bold', fontSize=7.5, leading=9.5, textColor=colors.HexColor('#B91C1C'))
     
     action_green_style = ParagraphStyle('ActionGreen', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#15803D'))
     action_blue_style = ParagraphStyle('ActionBlue', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#1D4ED8'))
@@ -247,10 +246,11 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
             for j_raw in job_blocks:
                 parsed = parse_job_block(j_raw)
                 
-                campaign_cell = [Paragraph(parsed['title'], job_title_style)]
+                campaign_html = f"{parsed['title']}"
                 if parsed['note']:
-                    campaign_cell.append(Paragraph(f"🚨 {parsed['note']}", job_note_style))
-
+                    campaign_html += f"<br/><font color='#B91C1C'><b>🚨 {parsed['note']}</b></font>"
+                
+                campaign_cell = Paragraph(campaign_html, job_title_style)
                 media_cell = Paragraph(parsed['media'], job_media_style) if parsed['media'] else Paragraph("", job_media_style)
 
                 # Color logic: Slate Blue ONLY for MAINTAIN + Max A0; otherwise Green
@@ -283,19 +283,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
         story.append(Spacer(1, 12))
 
-    # Automatic flattener failsafe
-    clean_story = []
-    def flatten(items):
-        res = []
-        for item in items:
-            if isinstance(item, list):
-                res.extend(flatten(item))
-            else:
-                res.append(item)
-        return res
-
-    clean_story = flatten(story)
-    doc.build(clean_story)
+    doc.build(story)
     return buffer.getvalue()
 
 
