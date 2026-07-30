@@ -6,7 +6,7 @@ import zipfile
 import pypdf
 
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Flowable
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -179,9 +179,9 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
     size_style = ParagraphStyle('SizeStyle', fontName='Helvetica', fontSize=8.5, leading=11, textColor=colors.HexColor('#334155'))
     qty_style = ParagraphStyle('QtyStyle', fontName='Helvetica-Bold', fontSize=9, leading=11, alignment=1, textColor=colors.HexColor('#0F172A'))
 
-    story = []
+    raw_story = []
     clean_title = pdf_filename.replace('.pdf', '')
-    story.append(Paragraph(f"{clean_title} (Optimized Route)", title_style))
+    raw_story.append(Paragraph(f"{clean_title} (Optimized Route)", title_style))
 
     job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
 
@@ -201,7 +201,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
             ('LEFTPADDING', (0,0), (-1,-1), 8),
             ('RIGHTPADDING', (0,0), (-1,-1), 8),
         ]))
-        story.append(header_table)
+        raw_story.append(header_table)
 
         # 2. Extract Sub-headers & Jobs
         sub_headers = []
@@ -230,8 +230,8 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
         if sub_headers:
             sub_str = " | ".join(sub_headers)
-            story.append(Spacer(1, 2))
-            story.append(Paragraph(sub_str, site_sub_style))
+            raw_story.append(Spacer(1, 2))
+            raw_story.append(Paragraph(sub_str, site_sub_style))
 
         # 3. Build 5-Column Table (CAMPAIGN | MEDIA DETAILS | ACTION | SIZE | QTY)
         if job_blocks:
@@ -278,12 +278,15 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
                 ('LEFTPADDING', (0,0), (-1,-1), 4),
                 ('RIGHTPADDING', (0,0), (-1,-1), 4),
             ]))
-            story.append(Spacer(1, 4))
-            story.append(j_table)
+            raw_story.append(Spacer(1, 4))
+            raw_story.append(j_table)
 
-        story.append(Spacer(1, 12))
+        raw_story.append(Spacer(1, 12))
 
-    doc.build(story)
+    # STRICT SANITIZATION: Only pass valid ReportLab Flowables to doc.build
+    clean_story = [x for x in raw_story if isinstance(x, Flowable)]
+
+    doc.build(clean_story)
     return buffer.getvalue()
 
 
@@ -297,20 +300,27 @@ if st.button("🚀 Process & Re-order PDFs", type="primary"):
             df = pd.read_csv(csv_file)
             
             zip_buffer = io.BytesIO()
+            processed_count = 0
+            
             with zipfile.ZipFile(zip_buffer, "w") as zf:
                 for pdf_file in pdf_files:
-                    pdf_text = extract_pdf_text(pdf_file)
-                    csv_mapping = get_mapping_for_pdf(df, pdf_file.name, pdf_text)
-                    sorted_blocks = parse_and_sort_pdf(pdf_text, csv_mapping)
-                    pdf_bytes = generate_reportlab_pdf(sorted_blocks, pdf_file.name)
-                    
-                    output_name = f"Optimized_{pdf_file.name}"
-                    zf.writestr(output_name, pdf_bytes)
+                    try:
+                        pdf_text = extract_pdf_text(pdf_file)
+                        csv_mapping = get_mapping_for_pdf(df, pdf_file.name, pdf_text)
+                        sorted_blocks = parse_and_sort_pdf(pdf_text, csv_mapping)
+                        pdf_bytes = generate_reportlab_pdf(sorted_blocks, pdf_file.name)
+                        
+                        output_name = f"Optimized_{pdf_file.name}"
+                        zf.writestr(output_name, pdf_bytes)
+                        processed_count += 1
+                    except Exception as err:
+                        st.error(f"❌ Error processing `{pdf_file.name}`: {str(err)}")
             
-            st.success("All PDFs successfully processed!")
-            st.download_button(
-                label="📦 Download Optimized PDFs (.zip)",
-                data=zip_buffer.getvalue(),
-                file_name="Optimized_Run_Sheets.zip",
-                mime="application/zip"
-            )
+            if processed_count > 0:
+                st.success(f"Successfully processed {processed_count} PDF(s)!")
+                st.download_button(
+                    label="📦 Download Optimized PDFs (.zip)",
+                    data=zip_buffer.getvalue(),
+                    file_name="Optimized_Run_Sheets.zip",
+                    mime="application/zip"
+                )
