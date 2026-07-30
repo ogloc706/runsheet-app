@@ -6,7 +6,7 @@ import zipfile
 import pypdf
 
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -283,7 +283,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
             block_elements.append(j_table)
 
         block_elements.append(Spacer(1, 10))
-        story.append(block_elements)
+        story.append(KeepTogether(block_elements))
 
     doc.build(story)
     return buffer.getvalue()
