@@ -50,7 +50,7 @@ def get_mapping_for_pdf(df, pdf_filename, pdf_text):
         matched_t = None
         for t in unique_territories:
             t_str = str(t).strip()
-            identifier = t_str.split()[-1].lower() # e.g. "a", "b", "c", "cbd1"
+            identifier = t_str.split()[-1].lower() # e.g., "a", "b", "c", "cbd1"
             pdf_norm = re.sub(r'[^a-z0-9]', ' ', pdf_filename.lower())
             
             if (f"wellington {identifier}" in pdf_norm or 
@@ -227,7 +227,7 @@ class CompactRunSheetFPDF(FPDF):
         # Re-enable auto_page_break for next elements
         self.set_auto_page_break(True, margin=15)
 
-        # Row Bottom Border
+        # Row Bottom Border Line
         self.set_xy(x_start, max_y)
         self.set_draw_color(226, 232, 240)
         self.line(x_start, max_y, x_start + sum(col_w), max_y)
