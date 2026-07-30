@@ -6,7 +6,7 @@ import zipfile
 import pypdf
 
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -99,56 +99,91 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     return sorted_blocks
 
 
+def parse_job_block(lines):
+    first_line = lines[0]
+    match = re.match(r'^([A-Z]{3,5}\d{5,8})(.*)', first_line)
+    job_id = match.group(1) if match else ""
+    rest_first = match.group(2).strip() if match else first_line
+    
+    media = ""
+    notes = []
+    action = "INSTALL"
+    size = ""
+    qty = "1"
+    title_parts = [rest_first] if rest_first else []
+    
+    for l in lines[1:]:
+        l_str = l.strip()
+        if l_str.lower().startswith("media:"):
+            media = l_str
+        elif l_str.lower().startswith("note:"):
+            notes.append(l_str)
+        elif "cover up required" in l_str.lower():
+            notes.append(l_str)
+        elif re.match(r'^(install|maintain)\b', l_str, re.IGNORECASE):
+            parts = l_str.split()
+            action = parts[0].upper()
+            if len(parts) >= 2:
+                size = parts[1]
+            if len(parts) >= 3:
+                qty = parts[2]
+        else:
+            title_parts.append(l_str)
+            
+    campaign_title = " ".join(title_parts)
+    note_text = " | ".join(notes)
+    
+    return {
+        'job_id': job_id,
+        'title': campaign_title,
+        'media': media,
+        'note': note_text,
+        'action': action,
+        'size': size,
+        'qty': qty
+    }
+
+
 def generate_reportlab_pdf(sorted_blocks, pdf_filename):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        rightMargin=30,
-        leftMargin=30,
-        topMargin=30,
-        bottomMargin=30
+        rightMargin=25,
+        leftMargin=25,
+        topMargin=25,
+        bottomMargin=25
     )
     styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
-        'TitleStyle',
+        'DocTitle',
         parent=styles['Heading1'],
-        fontSize=14,
-        leading=18,
-        spaceAfter=12
-    )
-
-    site_header_style = ParagraphStyle(
-        'SiteHeader',
-        parent=styles['Heading2'],
-        fontSize=11,
-        leading=14,
+        fontSize=13,
+        leading=16,
         fontName='Helvetica-Bold',
-        spaceAfter=2
+        textColor=colors.HexColor('#0F172A'),
+        spaceAfter=10
     )
 
-    site_sub_style = ParagraphStyle(
-        'SiteSub',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor('#444444'),
-        spaceAfter=4
-    )
+    site_code_style = ParagraphStyle('SiteCode', fontName='Helvetica-Bold', fontSize=10, leading=12, textColor=colors.white)
+    site_sub_style = ParagraphStyle('SiteSub', fontName='Helvetica-Oblique', fontSize=8.5, leading=11, textColor=colors.HexColor('#475569'))
+    table_header_style = ParagraphStyle('TableHeader', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#475569'))
 
-    item_text_style = ParagraphStyle(
-        'ItemText',
-        parent=styles['Normal'],
-        fontSize=9,
-        leading=12
-    )
+    job_title_style = ParagraphStyle('JobTitle', fontName='Helvetica-Bold', fontSize=8.5, leading=11, textColor=colors.HexColor('#1E293B'))
+    job_media_style = ParagraphStyle('JobMedia', fontName='Helvetica', fontSize=8, leading=10, textColor=colors.HexColor('#475569'))
+    job_note_style = ParagraphStyle('JobNote', fontName='Helvetica-Bold', fontSize=7.5, leading=9.5, textColor=colors.HexColor('#B91C1C'))
+    
+    action_green_style = ParagraphStyle('ActionGreen', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#15803D'))
+    action_blue_style = ParagraphStyle('ActionBlue', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#1D4ED8'))
+    
+    size_style = ParagraphStyle('SizeStyle', fontName='Helvetica', fontSize=8.5, leading=11, textColor=colors.HexColor('#334155'))
+    qty_style = ParagraphStyle('QtyStyle', fontName='Helvetica-Bold', fontSize=9, leading=11, alignment=1, textColor=colors.HexColor('#0F172A'))
 
     story = []
     clean_title = pdf_filename.replace('.pdf', '')
     story.append(Paragraph(f"{clean_title} (Optimized Route)", title_style))
 
-    # Pattern matches 3-5 uppercase letters + 5-8 digits, regardless of following spaces
     job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
 
     for b in sorted_blocks:
@@ -158,9 +193,19 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
         if not raw_lines:
             continue
 
-        site_line = raw_lines[0]
-        block_elements.append(Paragraph(site_line, site_header_style))
+        # 1. Site Header Bar
+        site_header_text = raw_lines[0]
+        header_table = Table([[Paragraph(site_header_text, site_code_style)]], colWidths=[545])
+        header_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#1E293B')),
+            ('TOPPADDING', (0,0), (-1,-1), 5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+            ('LEFTPADDING', (0,0), (-1,-1), 8),
+            ('RIGHTPADDING', (0,0), (-1,-1), 8),
+        ]))
+        block_elements.append(header_table)
 
+        # 2. Extract Sub-headers & Jobs
         sub_headers = []
         job_blocks = []
         current_job = None
@@ -185,28 +230,60 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
         if current_job:
             job_blocks.append(current_job)
 
-        for sub in sub_headers:
-            block_elements.append(Paragraph(sub, site_sub_style))
+        if sub_headers:
+            sub_str = " | ".join(sub_headers)
+            block_elements.append(Spacer(1, 2))
+            block_elements.append(Paragraph(sub_str, site_sub_style))
 
-        table_rows = []
-        for j_block in job_blocks:
-            job_str = "<br/>".join(j_block)
-            table_rows.append([Paragraph(job_str, item_text_style)])
+        # 3. Build 5-Column Table (CAMPAIGN | MEDIA DETAILS | ACTION | SIZE | QTY)
+        if job_blocks:
+            jobs_table_data = [[
+                Paragraph("CAMPAIGN", table_header_style),
+                Paragraph("MEDIA DETAILS", table_header_style),
+                Paragraph("ACTION", table_header_style),
+                Paragraph("SIZE", table_header_style),
+                Paragraph("QTY", table_header_style),
+            ]]
 
-        if table_rows:
-            t = Table(table_rows, colWidths=[500])
-            t.setStyle(TableStyle([
+            for j_raw in job_blocks:
+                parsed = parse_job_block(j_raw)
+                
+                campaign_cell = [Paragraph(parsed['title'], job_title_style)]
+                if parsed['note']:
+                    campaign_cell.append(Paragraph(f"🚨 {parsed['note']}", job_note_style))
+
+                media_cell = Paragraph(parsed['media'], job_media_style) if parsed['media'] else Paragraph("", job_media_style)
+
+                # Color logic: Slate Blue ONLY for MAINTAIN + Max A0; otherwise Green
+                if parsed['action'] == "MAINTAIN" and "max a0" in parsed['media'].lower():
+                    act_style = action_blue_style
+                else:
+                    act_style = action_green_style
+
+                jobs_table_data.append([
+                    campaign_cell,
+                    media_cell,
+                    Paragraph(parsed['action'], act_style),
+                    Paragraph(parsed['size'], size_style),
+                    Paragraph(parsed['qty'], qty_style)
+                ])
+
+            j_table = Table(jobs_table_data, colWidths=[205, 140, 65, 90, 45])
+            j_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F8FAFC')),
+                ('LINEBELOW', (0,0), (-1,0), 1, colors.HexColor('#CBD5E1')),
+                ('LINEBELOW', (0,1), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
                 ('TOPPADDING', (0,0), (-1,-1), 4),
-                ('LINEBELOW', (0,0), (-1,-2), 0.5, colors.HexColor('#E0E0E0')),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ('LEFTPADDING', (0,0), (-1,-1), 4),
+                ('RIGHTPADDING', (0,0), (-1,-1), 4),
             ]))
-            block_elements.append(t)
+            block_elements.append(Spacer(1, 4))
+            block_elements.append(j_table)
 
-        block_elements.append(Spacer(1, 8))
-        block_elements.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#CCCCCC'), spaceAfter=10))
-
-        story.append(KeepTogether(block_elements))
+        block_elements.append(Spacer(1, 10))
+        story.append(block_elements)
 
     doc.build(story)
     return buffer.getvalue()
