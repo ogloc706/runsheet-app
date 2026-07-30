@@ -83,7 +83,7 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
     
-    # Line-anchored regex: avoids matching artwork codes (like ABU096903) in the middle of notes
+    # Line-anchored regex to match valid site codes at start of line
     line_start_site_pattern = re.compile(r'^(?:\|\s*)?\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
     
     for i, line in enumerate(lines):
@@ -190,9 +190,9 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
     size_style = ParagraphStyle('SizeStyle', fontName='Helvetica', fontSize=8.5, leading=11, textColor=colors.HexColor('#334155'))
     qty_style = ParagraphStyle('QtyStyle', fontName='Helvetica-Bold', fontSize=9, leading=11, alignment=1, textColor=colors.HexColor('#0F172A'))
 
-    raw_story = []
+    story = []
     clean_title = pdf_filename.replace('.pdf', '')
-    raw_story.append(Paragraph(saxutils.escape(f"{clean_title} (Optimized Route)"), title_style))
+    story.append(Paragraph(saxutils.escape(f"{clean_title} (Optimized Route)"), title_style))
 
     job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
 
@@ -212,7 +212,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
             ('LEFTPADDING', (0,0), (-1,-1), 8),
             ('RIGHTPADDING', (0,0), (-1,-1), 8),
         ]))
-        raw_story.append(header_table)
+        story.append(header_table)
 
         # 2. Extract Sub-headers & Jobs
         sub_headers = []
@@ -241,8 +241,8 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
         if sub_headers:
             sub_str = saxutils.escape(" | ".join(sub_headers))
-            raw_story.append(Spacer(1, 2))
-            raw_story.append(Paragraph(sub_str, site_sub_style))
+            story.append(Spacer(1, 2))
+            story.append(Paragraph(sub_str, site_sub_style))
 
         # 3. Build 5-Column Table
         if job_blocks:
@@ -281,7 +281,8 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
                 ])
 
             j_table = Table(jobs_table_data, colWidths=[205, 140, 65, 90, 45])
-            j_table.setStyle(TableStyle([
+            
+            t_style = TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'TOP'),
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F8FAFC')),
                 ('LINEBELOW', (0,0), (-1,0), 1, colors.HexColor('#CBD5E1')),
@@ -290,16 +291,15 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
                 ('BOTTOMPADDING', (0,0), (-1,-1), 4),
                 ('LEFTPADDING', (0,0), (-1,-1), 4),
                 ('RIGHTPADDING', (0,0), (-1,-1), 4),
-            ]))
-            raw_story.append(Spacer(1, 4))
-            raw_story.append(j_table)
+            ])
+            j_table.setStyle(t_style)
+            
+            story.append(Spacer(1, 4))
+            story.append(j_table)
 
-        raw_story.append(Spacer(1, 12))
+        story.append(Spacer(1, 12))
 
-    # STRICT SANITIZATION: Only pass Flowable instances to doc.build
-    clean_story = [x for x in raw_story if isinstance(x, Flowable)]
-
-    doc.build(clean_story)
+    doc.build(story)
     return buffer.getvalue()
 
 
