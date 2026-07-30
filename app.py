@@ -83,7 +83,7 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
     
-    # Line-anchored regex to match valid site codes at start of line
+    # Line-anchored regex: matches site codes at line starts only
     line_start_site_pattern = re.compile(r'^(?:\|\s*)?\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
     
     for i, line in enumerate(lines):
@@ -204,14 +204,17 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
         # 1. Site Header Bar
         site_header_text = saxutils.escape(raw_lines[0])
-        header_table = Table([[Paragraph(site_header_text, site_code_style)]], colWidths=[545])
-        header_table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#1E293B')),
-            ('TOPPADDING', (0,0), (-1,-1), 5),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-            ('LEFTPADDING', (0,0), (-1,-1), 8),
-            ('RIGHTPADDING', (0,0), (-1,-1), 8),
-        ]))
+        header_table = Table(
+            [[Paragraph(site_header_text, site_code_style)]],
+            colWidths=[545],
+            style=TableStyle([
+                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#1E293B')),
+                ('TOPPADDING', (0,0), (-1,-1), 5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+                ('LEFTPADDING', (0,0), (-1,-1), 8),
+                ('RIGHTPADDING', (0,0), (-1,-1), 8),
+            ])
+        )
         story.append(header_table)
 
         # 2. Extract Sub-headers & Jobs
@@ -280,26 +283,28 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
                     Paragraph(saxutils.escape(parsed['qty']), qty_style)
                 ])
 
-            j_table = Table(jobs_table_data, colWidths=[205, 140, 65, 90, 45])
-            
-            t_style = TableStyle([
-                ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F8FAFC')),
-                ('LINEBELOW', (0,0), (-1,0), 1, colors.HexColor('#CBD5E1')),
-                ('LINEBELOW', (0,1), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
-                ('TOPPADDING', (0,0), (-1,-1), 4),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-                ('LEFTPADDING', (0,0), (-1,-1), 4),
-                ('RIGHTPADDING', (0,0), (-1,-1), 4),
-            ])
-            j_table.setStyle(t_style)
+            j_table = Table(
+                jobs_table_data,
+                colWidths=[205, 140, 65, 90, 45],
+                style=TableStyle([
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F8FAFC')),
+                    ('LINEBELOW', (0,0), (-1,0), 1, colors.HexColor('#CBD5E1')),
+                    ('LINEBELOW', (0,1), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
+                    ('TOPPADDING', (0,0), (-1,-1), 4),
+                    ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                    ('LEFTPADDING', (0,0), (-1,-1), 4),
+                    ('RIGHTPADDING', (0,0), (-1,-1), 4),
+                ])
+            )
             
             story.append(Spacer(1, 4))
             story.append(j_table)
 
         story.append(Spacer(1, 12))
 
-    doc.build(story)
+    clean_story = [x for x in story if isinstance(x, Flowable)]
+    doc.build(clean_story)
     return buffer.getvalue()
 
 
