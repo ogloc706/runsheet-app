@@ -83,7 +83,7 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
     
-    # Line-anchored regex: avoids matching job artwork references (like ABU096903) in the middle of notes
+    # Line-anchored regex: avoids matching artwork codes (like ABU096903) in the middle of notes
     line_start_site_pattern = re.compile(r'^(?:\|\s*)?\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
     
     for i, line in enumerate(lines):
@@ -177,8 +177,8 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
         spaceAfter=10
     )
 
-    site_code_style = ParagraphStyle('SiteCode', fontName='Helvetica-Bold', fontSize=10, leading=12, textColor=colors.white, keepWithNext=True)
-    site_sub_style = ParagraphStyle('SiteSub', fontName='Helvetica-Oblique', fontSize=8.5, leading=11, textColor=colors.HexColor('#475569'), keepWithNext=True)
+    site_code_style = ParagraphStyle('SiteCode', fontName='Helvetica-Bold', fontSize=10, leading=12, textColor=colors.white)
+    site_sub_style = ParagraphStyle('SiteSub', fontName='Helvetica-Oblique', fontSize=8.5, leading=11, textColor=colors.HexColor('#475569'))
     table_header_style = ParagraphStyle('TableHeader', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#475569'))
 
     job_title_style = ParagraphStyle('JobTitle', fontName='Helvetica-Bold', fontSize=8.5, leading=11, textColor=colors.HexColor('#1E293B'))
@@ -264,7 +264,6 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
                     campaign_html += f"<br/><font color='#B91C1C'><b>🚨 {escaped_note}</b></font>"
                 
                 campaign_cell = Paragraph(campaign_html, job_title_style)
-                
                 escaped_media = saxutils.escape(parsed['media'])
                 media_cell = Paragraph(escaped_media, job_media_style) if escaped_media else Paragraph("", job_media_style)
 
@@ -297,7 +296,9 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
         raw_story.append(Spacer(1, 12))
 
+    # STRICT SANITIZATION: Only pass Flowable instances to doc.build
     clean_story = [x for x in raw_story if isinstance(x, Flowable)]
+
     doc.build(clean_story)
     return buffer.getvalue()
 
