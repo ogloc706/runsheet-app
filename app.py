@@ -283,7 +283,19 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
         story.append(Spacer(1, 12))
 
-    doc.build(story)
+    # Automatic flattener failsafe
+    clean_story = []
+    def flatten(items):
+        res = []
+        for item in items:
+            if isinstance(item, list):
+                res.extend(flatten(item))
+            else:
+                res.append(item)
+        return res
+
+    clean_story = flatten(story)
+    doc.build(clean_story)
     return buffer.getvalue()
 
 
