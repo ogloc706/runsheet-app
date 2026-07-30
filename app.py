@@ -4,6 +4,7 @@ import re
 import io
 import zipfile
 import pypdf
+import xml.sax.saxutils as saxutils
 
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Flowable
@@ -32,7 +33,7 @@ def extract_pdf_text(uploaded_file):
 def get_mapping_for_pdf(df, pdf_filename, pdf_text):
     territory_col = None
     for col in df.columns:
-        if str(col).strip().lower() in ['territory', 'zone', 'area', 'region', 'sheet']:
+        if str(col).strip().lower() in ['zone', 'territory', 'area', 'region', 'sheet']:
             territory_col = col
             break
             
@@ -43,12 +44,21 @@ def get_mapping_for_pdf(df, pdf_filename, pdf_text):
         matched_t = None
         for t in unique_territories:
             t_str = str(t).strip()
-            if t_str.lower() in pdf_filename.lower() or t_str.lower() in first_line.lower():
+            territory_identifier = t_str.split()[-1].lower() # e.g. "a", "b", "c", "cbd1"
+            
+            pdf_norm = re.sub(r'[^a-z0-9]', ' ', pdf_filename.lower())
+            first_norm = re.sub(r'[^a-z0-9]', ' ', first_line.lower())
+            
+            if (f"wellington {territory_identifier}" in pdf_norm or 
+                f"territory {territory_identifier}" in pdf_norm or 
+                f" {territory_identifier} " in f" {pdf_norm} " or
+                t_str.lower() in pdf_filename.lower() or 
+                t_str.lower() in first_line.lower()):
                 matched_t = t
                 break
                 
         if matched_t:
-            st.info(f"📍 Matched territory **'{matched_t}'** for `{pdf_filename}`")
+            st.info(f"📍 Matched zone **'{matched_t}'** for `{pdf_filename}`")
             filtered_df = df[df[territory_col] == matched_t]
             return dict(zip(filtered_df['code'].astype(str).str.strip(), filtered_df['Coding']))
             
@@ -73,10 +83,11 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
     
-    site_pattern = re.compile(r'\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
+    # Line-anchored regex: avoids matching job artwork references (like ABU096903) in the middle of notes
+    line_start_site_pattern = re.compile(r'^(?:\|\s*)?\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
     
     for i, line in enumerate(lines):
-        match = site_pattern.search(line)
+        match = line_start_site_pattern.search(line)
         if match:
             headers_found.append((i, line, match.group(1)))
 
@@ -181,7 +192,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
     raw_story = []
     clean_title = pdf_filename.replace('.pdf', '')
-    raw_story.append(Paragraph(f"{clean_title} (Optimized Route)", title_style))
+    raw_story.append(Paragraph(saxutils.escape(f"{clean_title} (Optimized Route)"), title_style))
 
     job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
 
@@ -192,7 +203,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
             continue
 
         # 1. Site Header Bar
-        site_header_text = raw_lines[0]
+        site_header_text = saxutils.escape(raw_lines[0])
         header_table = Table([[Paragraph(site_header_text, site_code_style)]], colWidths=[545])
         header_table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#1E293B')),
@@ -229,11 +240,11 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
             job_blocks.append(current_job)
 
         if sub_headers:
-            sub_str = " | ".join(sub_headers)
+            sub_str = saxutils.escape(" | ".join(sub_headers))
             raw_story.append(Spacer(1, 2))
             raw_story.append(Paragraph(sub_str, site_sub_style))
 
-        # 3. Build 5-Column Table (CAMPAIGN | MEDIA DETAILS | ACTION | SIZE | QTY)
+        # 3. Build 5-Column Table
         if job_blocks:
             jobs_table_data = [[
                 Paragraph("CAMPAIGN", table_header_style),
@@ -246,14 +257,17 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
             for j_raw in job_blocks:
                 parsed = parse_job_block(j_raw)
                 
-                campaign_html = f"{parsed['title']}"
+                escaped_title = saxutils.escape(parsed['title'])
+                campaign_html = f"{escaped_title}"
                 if parsed['note']:
-                    campaign_html += f"<br/><font color='#B91C1C'><b>🚨 {parsed['note']}</b></font>"
+                    escaped_note = saxutils.escape(parsed['note'])
+                    campaign_html += f"<br/><font color='#B91C1C'><b>🚨 {escaped_note}</b></font>"
                 
                 campaign_cell = Paragraph(campaign_html, job_title_style)
-                media_cell = Paragraph(parsed['media'], job_media_style) if parsed['media'] else Paragraph("", job_media_style)
+                
+                escaped_media = saxutils.escape(parsed['media'])
+                media_cell = Paragraph(escaped_media, job_media_style) if escaped_media else Paragraph("", job_media_style)
 
-                # Color logic: Slate Blue ONLY for MAINTAIN + Max A0; otherwise Green
                 if parsed['action'] == "MAINTAIN" and "max a0" in parsed['media'].lower():
                     act_style = action_blue_style
                 else:
@@ -262,9 +276,9 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
                 jobs_table_data.append([
                     campaign_cell,
                     media_cell,
-                    Paragraph(parsed['action'], act_style),
-                    Paragraph(parsed['size'], size_style),
-                    Paragraph(parsed['qty'], qty_style)
+                    Paragraph(saxutils.escape(parsed['action']), act_style),
+                    Paragraph(saxutils.escape(parsed['size']), size_style),
+                    Paragraph(saxutils.escape(parsed['qty']), qty_style)
                 ])
 
             j_table = Table(jobs_table_data, colWidths=[205, 140, 65, 90, 45])
@@ -283,9 +297,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
 
         raw_story.append(Spacer(1, 12))
 
-    # STRICT SANITIZATION: Only pass valid ReportLab Flowables to doc.build
     clean_story = [x for x in raw_story if isinstance(x, Flowable)]
-
     doc.build(clean_story)
     return buffer.getvalue()
 
