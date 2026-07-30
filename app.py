@@ -39,7 +39,6 @@ def clean_txt(s):
 
 
 def get_mapping_for_pdf(df, pdf_filename, pdf_text):
-    # Dynamically locate columns regardless of minor naming differences
     code_col = next((c for c in df.columns if str(c).strip().lower() in ['code', 'site code', 'sitecode', 'site_code', 'id']), df.columns[1])
     coding_col = next((c for c in df.columns if str(c).strip().lower() in ['coding', 'code order', 'order', 'sequence', 'rank', 'route']), df.columns[-2])
     territory_col = next((c for c in df.columns if str(c).strip().lower() in ['zone', 'territory', 'area', 'region', 'sheet']), None)
@@ -157,34 +156,36 @@ def parse_job_block(lines):
     }
 
 
-class RunSheetFPDF(FPDF):
+class CompactRunSheetFPDF(FPDF):
     def __init__(self, doc_title):
         super().__init__()
         self.doc_title = clean_txt(doc_title)
+        self.set_auto_page_break(True, margin=15)
 
     def header(self):
         if self.page_no() == 1:
-            self.set_font("Helvetica", "B", 13)
+            self.set_font("Helvetica", "B", 12)
             self.set_text_color(15, 23, 42)
-            self.cell(0, 8, f"{self.doc_title} (Optimized Route)", ln=1)
+            self.cell(0, 7, f"{self.doc_title} (Optimized Route)", ln=1)
             self.ln(2)
 
     def draw_site_block(self, site_header, sub_str, jobs):
-        # Auto page-break check to prevent orphan site header bars
-        if self.get_y() > 260:
+        # Prevent orphan site header bars
+        estimated_block_h = 8 + (6 if sub_str else 0) + (10 if jobs else 0)
+        if self.get_y() + estimated_block_h > 275:
             self.add_page()
 
         # 1. Dark Navy Site Header Bar
         self.set_fill_color(30, 41, 59) # #1E293B
         self.set_text_color(255, 255, 255)
-        self.set_font("Helvetica", "B", 10)
-        self.cell(0, 7, f" {clean_txt(site_header)}", fill=True, ln=1)
+        self.set_font("Helvetica", "B", 9.5)
+        self.cell(0, 6, f" {clean_txt(site_header)}", fill=True, ln=1)
 
         # 2. Sub-header / Location description
         if sub_str:
             self.set_text_color(71, 85, 105)
             self.set_font("Helvetica", "I", 8)
-            self.cell(0, 5, f" Location: {clean_txt(sub_str)}", ln=1)
+            self.cell(0, 4.5, f" Location: {clean_txt(sub_str)}", ln=1)
 
         # 3. 5-Column Table
         if jobs:
@@ -194,14 +195,14 @@ class RunSheetFPDF(FPDF):
             self.set_fill_color(248, 250, 252)
             self.set_draw_color(203, 213, 225)
             self.set_text_color(71, 85, 105)
-            self.set_font("Helvetica", "B", 8)
+            self.set_font("Helvetica", "B", 7.5)
             
             headers = ["CAMPAIGN", "MEDIA DETAILS", "ACTION", "SIZE", "QTY"]
             for w, h in zip(col_w, headers):
-                self.cell(w, 5, h, border="B", fill=True)
+                self.cell(w, 4.5, h, border="B", fill=True)
             self.ln()
 
-            # Rows
+            # Job Rows
             for j in jobs:
                 title_txt = clean_txt(j['title'])
                 note_txt = clean_txt(j['note'])
@@ -211,23 +212,35 @@ class RunSheetFPDF(FPDF):
                 if note_txt:
                     full_camp += f"\n[!] {note_txt}"
 
+                # Pre-calculate required row height to prevent multi_cell page break cascades
+                self.set_font("Helvetica", "B", 8)
+                lines_col0 = len(self.multi_cell(col_w[0], 4, full_camp, split_only=True))
+                self.set_font("Helvetica", "", 7.5)
+                lines_col1 = len(self.multi_cell(col_w[1], 4, media_txt, split_only=True))
+                
+                needed_h = max(lines_col0, lines_col1) * 4 + 1.5
+
+                # Move to a fresh page BEFORE drawing if the row won't fit
+                if self.get_y() + needed_h > 275:
+                    self.add_page()
+
                 y_start = self.get_y()
                 x_start = self.get_x()
 
                 # Col 1: Campaign Title & Notes
                 self.set_font("Helvetica", "B", 8)
                 self.set_text_color(30, 41, 59)
-                self.multi_cell(col_w[0], 4.5, full_camp, border=0)
+                self.multi_cell(col_w[0], 4, full_camp, border=0)
                 y_end_col1 = self.get_y()
 
                 # Col 2: Media Details
                 self.set_xy(x_start + col_w[0], y_start)
-                self.set_font("Helvetica", "", 8)
+                self.set_font("Helvetica", "", 7.5)
                 self.set_text_color(71, 85, 105)
-                self.multi_cell(col_w[1], 4.5, media_txt, border=0)
+                self.multi_cell(col_w[1], 4, media_txt, border=0)
                 y_end_col2 = self.get_y()
 
-                max_y = max(y_end_col1, y_end_col2, y_start + 6)
+                max_y = max(y_end_col1, y_end_col2, y_start + 5)
 
                 # Col 3: Action Color Logic (Slate Blue for MAINTAIN + Max A0; Green for others)
                 self.set_xy(x_start + col_w[0] + col_w[1], y_start)
@@ -236,32 +249,32 @@ class RunSheetFPDF(FPDF):
                     self.set_text_color(29, 78, 216) # Blue
                 else:
                     self.set_text_color(21, 128, 61) # Green
-                self.cell(col_w[2], 5, clean_txt(j['action']), align="C")
+                self.cell(col_w[2], 4.5, clean_txt(j['action']), align="C")
 
                 # Col 4: Size
                 self.set_xy(x_start + col_w[0] + col_w[1] + col_w[2], y_start)
-                self.set_font("Helvetica", "", 8.5)
+                self.set_font("Helvetica", "", 8)
                 self.set_text_color(51, 65, 85)
-                self.cell(col_w[3], 5, clean_txt(j['size']))
+                self.cell(col_w[3], 4.5, clean_txt(j['size']))
 
                 # Col 5: Qty
                 self.set_xy(x_start + col_w[0] + col_w[1] + col_w[2] + col_w[3], y_start)
-                self.set_font("Helvetica", "B", 9)
+                self.set_font("Helvetica", "B", 8.5)
                 self.set_text_color(15, 23, 42)
-                self.cell(col_w[4], 5, clean_txt(j['qty']), align="C")
+                self.cell(col_w[4], 4.5, clean_txt(j['qty']), align="C")
 
-                # Row Bottom Border
+                # Row Bottom Border Line
                 self.set_xy(x_start, max_y)
                 self.set_draw_color(226, 232, 240)
                 self.line(x_start, max_y, x_start + sum(col_w), max_y)
-                self.set_y(max_y + 1)
+                self.set_y(max_y + 0.5)
 
-        self.ln(3)
+        self.ln(2.5)
 
 
-def generate_fpdf_pdf(sorted_blocks, pdf_filename):
+def generate_compact_pdf(sorted_blocks, pdf_filename):
     clean_title = pdf_filename.replace('.pdf', '')
-    pdf = RunSheetFPDF(clean_title)
+    pdf = CompactRunSheetFPDF(clean_title)
     pdf.add_page()
     
     job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
@@ -326,7 +339,7 @@ if st.button("🚀 Process & Re-order PDFs", type="primary"):
                         pdf_text = extract_pdf_text(pdf_file)
                         csv_mapping = get_mapping_for_pdf(df, pdf_file.name, pdf_text)
                         sorted_blocks = parse_and_sort_pdf(pdf_text, csv_mapping)
-                        pdf_bytes = generate_fpdf_pdf(sorted_blocks, pdf_file.name)
+                        pdf_bytes = generate_compact_pdf(sorted_blocks, pdf_file.name)
                         
                         output_name = f"Optimized_{pdf_file.name}"
                         zf.writestr(output_name, pdf_bytes)
