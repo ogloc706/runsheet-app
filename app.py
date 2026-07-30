@@ -82,7 +82,7 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
     
-    # Line-anchored regex to match valid site codes at start of line
+    # Line-anchored regex to match valid site codes at line starts only
     line_start_site_pattern = re.compile(r'^(?:\|\s*)?\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
     
     for i, line in enumerate(lines):
