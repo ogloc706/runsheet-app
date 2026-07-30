@@ -50,7 +50,7 @@ def get_mapping_for_pdf(df, pdf_filename, pdf_text):
         matched_t = None
         for t in unique_territories:
             t_str = str(t).strip()
-            identifier = t_str.split()[-1].lower() # e.g., "a", "b", "c", "cbd1"
+            identifier = t_str.split()[-1].lower() # e.g. "a", "b", "c", "cbd1"
             pdf_norm = re.sub(r'[^a-z0-9]', ' ', pdf_filename.lower())
             
             if (f"wellington {identifier}" in pdf_norm or 
@@ -169,10 +169,74 @@ class CompactRunSheetFPDF(FPDF):
             self.cell(0, 7, f"{self.doc_title} (Optimized Route)", ln=1)
             self.ln(2)
 
+    def draw_row_fixed(self, col_w, cell_texts, is_maintain_blue):
+        # 1. Calculate row height needed for Column 0 (Campaign) and Column 1 (Media)
+        self.set_font("Helvetica", "B", 8)
+        lines_col0 = len(self.multi_cell(col_w[0], 4, cell_texts[0], split_only=True))
+        self.set_font("Helvetica", "", 7.5)
+        lines_col1 = len(self.multi_cell(col_w[1], 4, cell_texts[1], split_only=True))
+        
+        needed_h = max(lines_col0, lines_col1) * 4 + 1.5
+
+        # 2. Check if row fits on current page (Max page Y ~282mm)
+        if self.get_y() + needed_h > 270:
+            self.add_page()
+
+        y_start = self.get_y()
+        x_start = self.get_x()
+
+        # Temporarily disable auto_page_break during row rendering to prevent column page-break cascades
+        self.set_auto_page_break(False)
+
+        # Col 0: Campaign Title & Notes
+        self.set_font("Helvetica", "B", 8)
+        self.set_text_color(30, 41, 59)
+        self.multi_cell(col_w[0], 4, cell_texts[0], border=0)
+        y_col0 = self.get_y()
+
+        # Col 1: Media Details
+        self.set_xy(x_start + col_w[0], y_start)
+        self.set_font("Helvetica", "", 7.5)
+        self.set_text_color(71, 85, 105)
+        self.multi_cell(col_w[1], 4, cell_texts[1], border=0)
+        y_col1 = self.get_y()
+
+        max_y = max(y_col0, y_col1, y_start + 5)
+
+        # Col 2: Action (Slate Blue for MAINTAIN + Max A0; Green for others)
+        self.set_xy(x_start + col_w[0] + col_w[1], y_start)
+        self.set_font("Helvetica", "B", 8)
+        if is_maintain_blue:
+            self.set_text_color(29, 78, 216) # Blue #1D4ED8
+        else:
+            self.set_text_color(21, 128, 61) # Green #15803D
+        self.cell(col_w[2], 4.5, cell_texts[2], align="C")
+
+        # Col 3: Size
+        self.set_xy(x_start + col_w[0] + col_w[1] + col_w[2], y_start)
+        self.set_font("Helvetica", "", 8)
+        self.set_text_color(51, 65, 85)
+        self.cell(col_w[3], 4.5, cell_texts[3])
+
+        # Col 4: Qty
+        self.set_xy(x_start + col_w[0] + col_w[1] + col_w[2] + col_w[3], y_start)
+        self.set_font("Helvetica", "B", 8.5)
+        self.set_text_color(15, 23, 42)
+        self.cell(col_w[4], 4.5, cell_texts[4], align="C")
+
+        # Re-enable auto_page_break for next elements
+        self.set_auto_page_break(True, margin=15)
+
+        # Row Bottom Border
+        self.set_xy(x_start, max_y)
+        self.set_draw_color(226, 232, 240)
+        self.line(x_start, max_y, x_start + sum(col_w), max_y)
+        self.set_y(max_y + 0.5)
+
     def draw_site_block(self, site_header, sub_str, jobs):
-        # Prevent orphan site header bars
+        # Page break check for entire site header block to prevent orphan header bars
         estimated_block_h = 8 + (6 if sub_str else 0) + (10 if jobs else 0)
-        if self.get_y() + estimated_block_h > 275:
+        if self.get_y() + estimated_block_h > 270:
             self.add_page()
 
         # 1. Dark Navy Site Header Bar
@@ -212,62 +276,9 @@ class CompactRunSheetFPDF(FPDF):
                 if note_txt:
                     full_camp += f"\n[!] {note_txt}"
 
-                # Pre-calculate required row height to prevent multi_cell page break cascades
-                self.set_font("Helvetica", "B", 8)
-                lines_col0 = len(self.multi_cell(col_w[0], 4, full_camp, split_only=True))
-                self.set_font("Helvetica", "", 7.5)
-                lines_col1 = len(self.multi_cell(col_w[1], 4, media_txt, split_only=True))
+                is_maintain_blue = (j['action'] == "MAINTAIN" and "max a0" in media_txt.lower())
                 
-                needed_h = max(lines_col0, lines_col1) * 4 + 1.5
-
-                # Move to a fresh page BEFORE drawing if the row won't fit
-                if self.get_y() + needed_h > 275:
-                    self.add_page()
-
-                y_start = self.get_y()
-                x_start = self.get_x()
-
-                # Col 1: Campaign Title & Notes
-                self.set_font("Helvetica", "B", 8)
-                self.set_text_color(30, 41, 59)
-                self.multi_cell(col_w[0], 4, full_camp, border=0)
-                y_end_col1 = self.get_y()
-
-                # Col 2: Media Details
-                self.set_xy(x_start + col_w[0], y_start)
-                self.set_font("Helvetica", "", 7.5)
-                self.set_text_color(71, 85, 105)
-                self.multi_cell(col_w[1], 4, media_txt, border=0)
-                y_end_col2 = self.get_y()
-
-                max_y = max(y_end_col1, y_end_col2, y_start + 5)
-
-                # Col 3: Action Color Logic (Slate Blue for MAINTAIN + Max A0; Green for others)
-                self.set_xy(x_start + col_w[0] + col_w[1], y_start)
-                self.set_font("Helvetica", "B", 8)
-                if j['action'] == "MAINTAIN" and "max a0" in media_txt.lower():
-                    self.set_text_color(29, 78, 216) # Blue
-                else:
-                    self.set_text_color(21, 128, 61) # Green
-                self.cell(col_w[2], 4.5, clean_txt(j['action']), align="C")
-
-                # Col 4: Size
-                self.set_xy(x_start + col_w[0] + col_w[1] + col_w[2], y_start)
-                self.set_font("Helvetica", "", 8)
-                self.set_text_color(51, 65, 85)
-                self.cell(col_w[3], 4.5, clean_txt(j['size']))
-
-                # Col 5: Qty
-                self.set_xy(x_start + col_w[0] + col_w[1] + col_w[2] + col_w[3], y_start)
-                self.set_font("Helvetica", "B", 8.5)
-                self.set_text_color(15, 23, 42)
-                self.cell(col_w[4], 4.5, clean_txt(j['qty']), align="C")
-
-                # Row Bottom Border Line
-                self.set_xy(x_start, max_y)
-                self.set_draw_color(226, 232, 240)
-                self.line(x_start, max_y, x_start + sum(col_w), max_y)
-                self.set_y(max_y + 0.5)
+                self.draw_row_fixed(col_w, [full_camp, media_txt, clean_txt(j['action']), clean_txt(j['size']), clean_txt(j['qty'])], is_maintain_blue)
 
         self.ln(2.5)
 
