@@ -2,3 +2,4 @@ streamlit
 pandas
 pypdf
 reportlab
+fpdf2
