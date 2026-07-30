@@ -4,12 +4,7 @@ import re
 import io
 import zipfile
 import pypdf
-import xml.sax.saxutils as saxutils
-
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Flowable
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
+from fpdf import FPDF
 
 st.set_page_config(page_title="Run Sheet Route Optimizer", layout="centered")
 
@@ -30,13 +25,25 @@ def extract_pdf_text(uploaded_file):
     return full_text
 
 
+def clean_txt(s):
+    if not isinstance(s, str):
+        s = str(s)
+    replacements = {
+        '—': '-', '–': '-', '’': "'", '‘': "'",
+        '“': '"', '”': '"', '…': '...', '🚨': '[!]',
+        '⚠️': '[!]', '\xa0': ' '
+    }
+    for orig, repl in replacements.items():
+        s = s.replace(orig, repl)
+    return s.encode('latin-1', 'replace').decode('latin-1')
+
+
 def get_mapping_for_pdf(df, pdf_filename, pdf_text):
-    territory_col = None
-    for col in df.columns:
-        if str(col).strip().lower() in ['zone', 'territory', 'area', 'region', 'sheet']:
-            territory_col = col
-            break
-            
+    # Dynamically locate columns regardless of minor naming differences
+    code_col = next((c for c in df.columns if str(c).strip().lower() in ['code', 'site code', 'sitecode', 'site_code', 'id']), df.columns[1])
+    coding_col = next((c for c in df.columns if str(c).strip().lower() in ['coding', 'code order', 'order', 'sequence', 'rank', 'route']), df.columns[-2])
+    territory_col = next((c for c in df.columns if str(c).strip().lower() in ['zone', 'territory', 'area', 'region', 'sheet']), None)
+
     if territory_col:
         first_line = pdf_text.strip().split('\n')[0] if pdf_text else ""
         unique_territories = df[territory_col].dropna().unique()
@@ -44,13 +51,12 @@ def get_mapping_for_pdf(df, pdf_filename, pdf_text):
         matched_t = None
         for t in unique_territories:
             t_str = str(t).strip()
-            territory_identifier = t_str.split()[-1].lower() # e.g. "a", "b", "c", "cbd1"
-            
+            identifier = t_str.split()[-1].lower() # e.g., "a", "b", "c", "cbd1"
             pdf_norm = re.sub(r'[^a-z0-9]', ' ', pdf_filename.lower())
             
-            if (f"wellington {territory_identifier}" in pdf_norm or 
-                f"territory {territory_identifier}" in pdf_norm or 
-                f" {territory_identifier} " in f" {pdf_norm} " or
+            if (f"wellington {identifier}" in pdf_norm or 
+                f"territory {identifier}" in pdf_norm or 
+                f" {identifier} " in f" {pdf_norm} " or
                 t_str.lower() in pdf_filename.lower() or 
                 t_str.lower() in first_line.lower()):
                 matched_t = t
@@ -59,9 +65,9 @@ def get_mapping_for_pdf(df, pdf_filename, pdf_text):
         if matched_t:
             st.info(f"📍 Matched zone **'{matched_t}'** for `{pdf_filename}`")
             filtered_df = df[df[territory_col] == matched_t]
-            return dict(zip(filtered_df['code'].astype(str).str.strip(), filtered_df['Coding']))
+            return dict(zip(filtered_df[code_col].astype(str).str.strip(), filtered_df[coding_col]))
             
-    return dict(zip(df['code'].astype(str).str.strip(), df['Coding']))
+    return dict(zip(df[code_col].astype(str).str.strip(), df[coding_col]))
 
 
 def find_csv_code(raw_code, csv_mapping):
@@ -81,7 +87,6 @@ def find_csv_code(raw_code, csv_mapping):
 def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
-    
     line_start_site_pattern = re.compile(r'^(?:\|\s*)?\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
     
     for i, line in enumerate(lines):
@@ -104,8 +109,7 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
             'block_lines': block_lines
         })
 
-    sorted_blocks = sorted(blocks, key=lambda x: x['coding'])
-    return sorted_blocks
+    return sorted(blocks, key=lambda x: x['coding'])
 
 
 def parse_job_block(lines):
@@ -153,65 +157,114 @@ def parse_job_block(lines):
     }
 
 
-def generate_reportlab_pdf(sorted_blocks, pdf_filename):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=25,
-        leftMargin=25,
-        topMargin=25,
-        bottomMargin=25
-    )
-    styles = getSampleStyleSheet()
+class RunSheetFPDF(FPDF):
+    def __init__(self, doc_title):
+        super().__init__()
+        self.doc_title = clean_txt(doc_title)
 
-    title_style = ParagraphStyle(
-        'DocTitle',
-        parent=styles['Heading1'],
-        fontSize=13,
-        leading=16,
-        fontName='Helvetica-Bold',
-        textColor=colors.HexColor('#0F172A'),
-        spaceAfter=10
-    )
+    def header(self):
+        if self.page_no() == 1:
+            self.set_font("Helvetica", "B", 13)
+            self.set_text_color(15, 23, 42)
+            self.cell(0, 8, f"{self.doc_title} (Optimized Route)", ln=1)
+            self.ln(2)
 
-    site_code_style = ParagraphStyle('SiteCode', fontName='Helvetica-Bold', fontSize=10, leading=12, textColor=colors.white)
-    site_sub_style = ParagraphStyle('SiteSub', fontName='Helvetica-Oblique', fontSize=8.5, leading=11, textColor=colors.HexColor('#475569'))
-    table_header_style = ParagraphStyle('TableHeader', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#475569'))
+    def draw_site_block(self, site_header, sub_str, jobs):
+        # Auto page-break check to prevent orphan site header bars
+        if self.get_y() > 260:
+            self.add_page()
 
-    job_title_style = ParagraphStyle('JobTitle', fontName='Helvetica-Bold', fontSize=8.5, leading=11, textColor=colors.HexColor('#1E293B'))
-    job_media_style = ParagraphStyle('JobMedia', fontName='Helvetica', fontSize=8, leading=10, textColor=colors.HexColor('#475569'))
-    
-    action_green_style = ParagraphStyle('ActionGreen', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#15803D'))
-    action_blue_style = ParagraphStyle('ActionBlue', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.HexColor('#1D4ED8'))
-    
-    size_style = ParagraphStyle('SizeStyle', fontName='Helvetica', fontSize=8.5, leading=11, textColor=colors.HexColor('#334155'))
-    qty_style = ParagraphStyle('QtyStyle', fontName='Helvetica-Bold', fontSize=9, leading=11, alignment=1, textColor=colors.HexColor('#0F172A'))
+        # 1. Dark Navy Site Header Bar
+        self.set_fill_color(30, 41, 59) # #1E293B
+        self.set_text_color(255, 255, 255)
+        self.set_font("Helvetica", "B", 10)
+        self.cell(0, 7, f" {clean_txt(site_header)}", fill=True, ln=1)
 
-    story = []
+        # 2. Sub-header / Location description
+        if sub_str:
+            self.set_text_color(71, 85, 105)
+            self.set_font("Helvetica", "I", 8)
+            self.cell(0, 5, f" Location: {clean_txt(sub_str)}", ln=1)
+
+        # 3. 5-Column Table
+        if jobs:
+            col_w = [75, 55, 22, 25, 13] # Total = 190mm (A4 printable width)
+            
+            # Table Header
+            self.set_fill_color(248, 250, 252)
+            self.set_draw_color(203, 213, 225)
+            self.set_text_color(71, 85, 105)
+            self.set_font("Helvetica", "B", 8)
+            
+            headers = ["CAMPAIGN", "MEDIA DETAILS", "ACTION", "SIZE", "QTY"]
+            for w, h in zip(col_w, headers):
+                self.cell(w, 5, h, border="B", fill=True)
+            self.ln()
+
+            # Rows
+            for j in jobs:
+                title_txt = clean_txt(j['title'])
+                note_txt = clean_txt(j['note'])
+                media_txt = clean_txt(j['media'])
+                
+                full_camp = title_txt
+                if note_txt:
+                    full_camp += f"\n[!] {note_txt}"
+
+                y_start = self.get_y()
+                x_start = self.get_x()
+
+                # Col 1: Campaign Title & Notes
+                self.set_font("Helvetica", "B", 8)
+                self.set_text_color(30, 41, 59)
+                self.multi_cell(col_w[0], 4.5, full_camp, border=0)
+                y_end_col1 = self.get_y()
+
+                # Col 2: Media Details
+                self.set_xy(x_start + col_w[0], y_start)
+                self.set_font("Helvetica", "", 8)
+                self.set_text_color(71, 85, 105)
+                self.multi_cell(col_w[1], 4.5, media_txt, border=0)
+                y_end_col2 = self.get_y()
+
+                max_y = max(y_end_col1, y_end_col2, y_start + 6)
+
+                # Col 3: Action Color Logic (Slate Blue for MAINTAIN + Max A0; Green for others)
+                self.set_xy(x_start + col_w[0] + col_w[1], y_start)
+                self.set_font("Helvetica", "B", 8)
+                if j['action'] == "MAINTAIN" and "max a0" in media_txt.lower():
+                    self.set_text_color(29, 78, 216) # Blue
+                else:
+                    self.set_text_color(21, 128, 61) # Green
+                self.cell(col_w[2], 5, clean_txt(j['action']), align="C")
+
+                # Col 4: Size
+                self.set_xy(x_start + col_w[0] + col_w[1] + col_w[2], y_start)
+                self.set_font("Helvetica", "", 8.5)
+                self.set_text_color(51, 65, 85)
+                self.cell(col_w[3], 5, clean_txt(j['size']))
+
+                # Col 5: Qty
+                self.set_xy(x_start + col_w[0] + col_w[1] + col_w[2] + col_w[3], y_start)
+                self.set_font("Helvetica", "B", 9)
+                self.set_text_color(15, 23, 42)
+                self.cell(col_w[4], 5, clean_txt(j['qty']), align="C")
+
+                # Row Bottom Border
+                self.set_xy(x_start, max_y)
+                self.set_draw_color(226, 232, 240)
+                self.line(x_start, max_y, x_start + sum(col_w), max_y)
+                self.set_y(max_y + 1)
+
+        self.ln(3)
+
+
+def generate_fpdf_pdf(sorted_blocks, pdf_filename):
     clean_title = pdf_filename.replace('.pdf', '')
-    story.append(Paragraph(saxutils.escape(f"{clean_title} (Optimized Route)"), title_style))
-
+    pdf = RunSheetFPDF(clean_title)
+    pdf.add_page()
+    
     job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
-
-    header_table_style = TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#1E293B')),
-        ('TOPPADDING', (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-        ('LEFTPADDING', (0,0), (-1,-1), 8),
-        ('RIGHTPADDING', (0,0), (-1,-1), 8),
-    ])
-
-    jobs_table_style = TableStyle([
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F8FAFC')),
-        ('LINEBELOW', (0,0), (-1,0), 1, colors.HexColor('#CBD5E1')),
-        ('LINEBELOW', (0,1), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-        ('LEFTPADDING', (0,0), (-1,-1), 4),
-        ('RIGHTPADDING', (0,0), (-1,-1), 4),
-    ])
 
     for b in sorted_blocks:
         block_text = "\n".join(b['block_lines'])
@@ -219,16 +272,7 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
         if not raw_lines:
             continue
 
-        # 1. Site Header Bar
-        site_header_text = saxutils.escape(raw_lines[0])
-        header_table = Table(
-            [[Paragraph(site_header_text, site_code_style)]],
-            colWidths=[545],
-            style=header_table_style
-        )
-        story.append(header_table)
-
-        # 2. Extract Sub-headers & Jobs
+        site_header_text = raw_lines[0]
         sub_headers = []
         job_blocks = []
         current_job = None
@@ -253,63 +297,15 @@ def generate_reportlab_pdf(sorted_blocks, pdf_filename):
         if current_job:
             job_blocks.append(current_job)
 
-        if sub_headers:
-            sub_str = saxutils.escape(" | ".join(sub_headers))
-            story.append(Spacer(1, 2))
-            story.append(Paragraph(sub_str, site_sub_style))
+        sub_str = " | ".join(sub_headers) if sub_headers else ""
+        parsed_jobs = [parse_job_block(j_raw) for j_raw in job_blocks]
+        
+        pdf.draw_site_block(site_header_text, sub_str, parsed_jobs)
 
-        # 3. Build 5-Column Table
-        if job_blocks:
-            jobs_table_data = [[
-                Paragraph("CAMPAIGN", table_header_style),
-                Paragraph("MEDIA DETAILS", table_header_style),
-                Paragraph("ACTION", table_header_style),
-                Paragraph("SIZE", table_header_style),
-                Paragraph("QTY", table_header_style),
-            ]]
-
-            for j_raw in job_blocks:
-                parsed = parse_job_block(j_raw)
-                
-                escaped_title = saxutils.escape(parsed['title'])
-                campaign_html = f"{escaped_title}"
-                if parsed['note']:
-                    escaped_note = saxutils.escape(parsed['note'])
-                    campaign_html += f"<br/><font color='#B91C1C'><b>🚨 {escaped_note}</b></font>"
-                
-                campaign_cell = Paragraph(campaign_html, job_title_style)
-                escaped_media = saxutils.escape(parsed['media'])
-                media_cell = Paragraph(escaped_media, job_media_style) if escaped_media else Paragraph("", job_media_style)
-
-                if parsed['action'] == "MAINTAIN" and "max a0" in parsed['media'].lower():
-                    act_style = action_blue_style
-                else:
-                    act_style = action_green_style
-
-                jobs_table_data.append([
-                    campaign_cell,
-                    media_cell,
-                    Paragraph(saxutils.escape(parsed['action']), act_style),
-                    Paragraph(saxutils.escape(parsed['size']), size_style),
-                    Paragraph(saxutils.escape(parsed['qty']), qty_style)
-                ])
-
-            j_table = Table(
-                jobs_table_data,
-                colWidths=[205, 140, 65, 90, 45],
-                style=jobs_table_style
-            )
-            
-            story.append(Spacer(1, 4))
-            story.append(j_table)
-
-        story.append(Spacer(1, 12))
-
-    # STRICT SANITIZATION: Guarantee ONLY Flowable instances with getKeepWithNext are passed
-    clean_story = [x for x in story if isinstance(x, Flowable) and hasattr(x, 'getKeepWithNext')]
-
-    doc.build(clean_story)
-    return buffer.getvalue()
+    out_data = pdf.output(dest="S")
+    if isinstance(out_data, str):
+        out_data = out_data.encode("latin1")
+    return out_data
 
 
 if st.button("🚀 Process & Re-order PDFs", type="primary"):
@@ -330,7 +326,7 @@ if st.button("🚀 Process & Re-order PDFs", type="primary"):
                         pdf_text = extract_pdf_text(pdf_file)
                         csv_mapping = get_mapping_for_pdf(df, pdf_file.name, pdf_text)
                         sorted_blocks = parse_and_sort_pdf(pdf_text, csv_mapping)
-                        pdf_bytes = generate_reportlab_pdf(sorted_blocks, pdf_file.name)
+                        pdf_bytes = generate_fpdf_pdf(sorted_blocks, pdf_file.name)
                         
                         output_name = f"Optimized_{pdf_file.name}"
                         zf.writestr(output_name, pdf_bytes)
