@@ -118,30 +118,15 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
 def parse_job_block(lines):
     first_line = lines[0]
     
-    # 1. Clean the job ID from the front of the string so the campaign title stays neat
-    match = re.match(r'^([A-Za-z]{3,5}\d{5,8}[A-Za-z]?)(.*)', first_line)
+    # 1. Clean the Job ID: Group 1 catches the optional 'I' or 'Q', Group 2 catches the true ID
+    match = re.match(r'^([QIqi]?)([A-Za-z]{2,4}\d{5,8})(.*)', first_line)
+    
+    clean_id = ""
     if match:
-        rest_first = match.group(2).strip()
+        clean_id = match.group(2).upper()
+        rest_first = match.group(3).strip()
     else:
         rest_first = first_line
-        
-    # 2. Robust Job ID Extractor: Strips internal 'Q' or 'I' tags
-    clean_id = ""
-    potential_ids = re.findall(r'\b[A-Za-z]{3,5}\d{5,8}[A-Za-z]?\b', first_line)
-    for m in potential_ids:
-        cand = m.upper()
-        # Strip 'Q' or 'I' from the start
-        if cand.startswith('Q') or cand.startswith('I'):
-            if re.match(r'^[A-Z]{2,4}\d{5,8}[A-Z]?$', cand[1:]):
-                cand = cand[1:]
-        # Strip 'Q' or 'I' from the end
-        if cand.endswith('Q') or cand.endswith('I'):
-            if re.match(r'^[A-Z]{2,4}\d{5,8}$', cand[:-1]):
-                cand = cand[:-1]
-        # Validate that we are left with a true Job ID (e.g. ABU105572)
-        if re.match(r'^[A-Z]{2,4}\d{5,8}$', cand):
-            clean_id = cand
-            break
     
     media = ""
     notes = []
@@ -310,7 +295,6 @@ class CompactRunSheetFPDF(FPDF):
                     
                     # Generate Trello Search Link
                     if enable_trello and "placement guide" in note_txt.lower():
-                        # Search by clean Job ID if found, otherwise fallback to the Campaign Name
                         if job_id:
                             safe_query = urllib.parse.quote(job_id)
                         else:
