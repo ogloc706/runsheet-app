@@ -17,6 +17,9 @@ csv_file = st.file_uploader("Choose your Master Route Plan CSV", type=["csv"])
 st.subheader("2. Upload Weekly PDF Run Sheets")
 pdf_files = st.file_uploader("Choose your PDF run sheet(s)", type=["pdf"], accept_multiple_files=True)
 
+st.subheader("3. Options")
+enable_trello = st.checkbox("🔗 Enable Trello Search Links for Placement Guides (Wellington Beta test)")
+
 
 def extract_pdf_text(uploaded_file):
     uploaded_file.seek(0)
@@ -50,7 +53,7 @@ def get_mapping_for_pdf(df, pdf_filename, pdf_text):
         matched_t = None
         for t in unique_territories:
             t_str = str(t).strip()
-            identifier = t_str.split()[-1].lower() # e.g., "a", "b", "c", "cbd1"
+            identifier = t_str.split()[-1].lower()
             pdf_norm = re.sub(r'[^a-z0-9]', ' ', pdf_filename.lower())
             
             if (f"wellington {identifier}" in pdf_norm or 
@@ -169,8 +172,7 @@ class CompactRunSheetFPDF(FPDF):
             self.cell(0, 7, f"{self.doc_title} (Optimized Route)", ln=1)
             self.ln(2)
 
-    def draw_row_fixed(self, col_w, cell_texts, is_maintain_blue):
-        # 1. Calculate row height needed for Column 0 (Campaign) and Column 1 (Media)
+    def draw_row_fixed(self, col_w, cell_texts, is_maintain_blue, job_url=None):
         self.set_font("Helvetica", "B", 8)
         lines_col0 = len(self.multi_cell(col_w[0], 4, cell_texts[0], split_only=True))
         self.set_font("Helvetica", "", 7.5)
@@ -178,14 +180,12 @@ class CompactRunSheetFPDF(FPDF):
         
         needed_h = max(lines_col0, lines_col1) * 4 + 1.5
 
-        # 2. Check if row fits on current page (Max page Y ~282mm)
         if self.get_y() + needed_h > 270:
             self.add_page()
 
         y_start = self.get_y()
         x_start = self.get_x()
 
-        # Temporarily disable auto_page_break during row rendering to prevent column page-break cascades
         self.set_auto_page_break(False)
 
         # Col 0: Campaign Title & Notes
@@ -193,6 +193,10 @@ class CompactRunSheetFPDF(FPDF):
         self.set_text_color(30, 41, 59)
         self.multi_cell(col_w[0], 4, cell_texts[0], border=0)
         y_col0 = self.get_y()
+        
+        # Overlay the clickable Trello link if it exists
+        if job_url:
+            self.link(x_start, y_start, col_w[0], y_col0 - y_start, job_url)
 
         # Col 1: Media Details
         self.set_xy(x_start + col_w[0], y_start)
@@ -203,13 +207,13 @@ class CompactRunSheetFPDF(FPDF):
 
         max_y = max(y_col0, y_col1, y_start + 5)
 
-        # Col 2: Action (Slate Blue for MAINTAIN + Max A0; Green for others)
+        # Col 2: Action
         self.set_xy(x_start + col_w[0] + col_w[1], y_start)
         self.set_font("Helvetica", "B", 8)
         if is_maintain_blue:
-            self.set_text_color(29, 78, 216) # Blue #1D4ED8
+            self.set_text_color(29, 78, 216) # Blue
         else:
-            self.set_text_color(21, 128, 61) # Green #15803D
+            self.set_text_color(21, 128, 61) # Green
         self.cell(col_w[2], 4.5, cell_texts[2], align="C")
 
         # Col 3: Size
@@ -224,7 +228,6 @@ class CompactRunSheetFPDF(FPDF):
         self.set_text_color(15, 23, 42)
         self.cell(col_w[4], 4.5, cell_texts[4], align="C")
 
-        # Re-enable auto_page_break for next elements
         self.set_auto_page_break(True, margin=15)
 
         # Row Bottom Border Line
@@ -233,19 +236,18 @@ class CompactRunSheetFPDF(FPDF):
         self.line(x_start, max_y, x_start + sum(col_w), max_y)
         self.set_y(max_y + 0.5)
 
-    def draw_site_block(self, site_header, sub_str, jobs):
-        # Page break check for entire site header block to prevent orphan header bars
+    def draw_site_block(self, site_header, sub_str, jobs, enable_trello):
         estimated_block_h = 8 + (6 if sub_str else 0) + (10 if jobs else 0)
         if self.get_y() + estimated_block_h > 270:
             self.add_page()
 
         # 1. Dark Navy Site Header Bar
-        self.set_fill_color(30, 41, 59) # #1E293B
+        self.set_fill_color(30, 41, 59)
         self.set_text_color(255, 255, 255)
         self.set_font("Helvetica", "B", 9.5)
         self.cell(0, 6, f" {clean_txt(site_header)}", fill=True, ln=1)
 
-        # 2. Sub-header / Location description
+        # 2. Location description
         if sub_str:
             self.set_text_color(71, 85, 105)
             self.set_font("Helvetica", "I", 8)
@@ -253,9 +255,8 @@ class CompactRunSheetFPDF(FPDF):
 
         # 3. 5-Column Table
         if jobs:
-            col_w = [75, 55, 22, 25, 13] # Total = 190mm (A4 printable width)
+            col_w = [75, 55, 22, 25, 13]
             
-            # Table Header
             self.set_fill_color(248, 250, 252)
             self.set_draw_color(203, 213, 225)
             self.set_text_color(71, 85, 105)
@@ -266,24 +267,31 @@ class CompactRunSheetFPDF(FPDF):
                 self.cell(w, 4.5, h, border="B", fill=True)
             self.ln()
 
-            # Job Rows
             for j in jobs:
                 title_txt = clean_txt(j['title'])
                 note_txt = clean_txt(j['note'])
                 media_txt = clean_txt(j['media'])
+                job_id = j['job_id']
                 
                 full_camp = title_txt
+                job_url = None
+                
                 if note_txt:
                     full_camp += f"\n[!] {note_txt}"
+                    
+                    # Add Trello search link prompt if toggled and applicable
+                    if enable_trello and job_id and "placement guide" in note_txt.lower():
+                        job_url = f"https://trello.com/search?q={job_id}"
+                        full_camp += "\n🔗 (Tap to Search Trello)"
 
                 is_maintain_blue = (j['action'] == "MAINTAIN" and "max a0" in media_txt.lower())
                 
-                self.draw_row_fixed(col_w, [full_camp, media_txt, clean_txt(j['action']), clean_txt(j['size']), clean_txt(j['qty'])], is_maintain_blue)
+                self.draw_row_fixed(col_w, [full_camp, media_txt, clean_txt(j['action']), clean_txt(j['size']), clean_txt(j['qty'])], is_maintain_blue, job_url)
 
         self.ln(2.5)
 
 
-def generate_compact_pdf(sorted_blocks, pdf_filename):
+def generate_compact_pdf(sorted_blocks, pdf_filename, enable_trello):
     clean_title = pdf_filename.replace('.pdf', '')
     pdf = CompactRunSheetFPDF(clean_title)
     pdf.add_page()
@@ -324,7 +332,7 @@ def generate_compact_pdf(sorted_blocks, pdf_filename):
         sub_str = " | ".join(sub_headers) if sub_headers else ""
         parsed_jobs = [parse_job_block(j_raw) for j_raw in job_blocks]
         
-        pdf.draw_site_block(site_header_text, sub_str, parsed_jobs)
+        pdf.draw_site_block(site_header_text, sub_str, parsed_jobs, enable_trello)
 
     out_data = pdf.output(dest="S")
     if isinstance(out_data, str):
@@ -350,7 +358,9 @@ if st.button("🚀 Process & Re-order PDFs", type="primary"):
                         pdf_text = extract_pdf_text(pdf_file)
                         csv_mapping = get_mapping_for_pdf(df, pdf_file.name, pdf_text)
                         sorted_blocks = parse_and_sort_pdf(pdf_text, csv_mapping)
-                        pdf_bytes = generate_compact_pdf(sorted_blocks, pdf_file.name)
+                        
+                        # Pass the toggle state into the PDF generator
+                        pdf_bytes = generate_compact_pdf(sorted_blocks, pdf_file.name, enable_trello)
                         
                         output_name = f"Optimized_{pdf_file.name}"
                         zf.writestr(output_name, pdf_bytes)
