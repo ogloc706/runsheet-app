@@ -18,7 +18,7 @@ st.subheader("2. Upload Weekly PDF Run Sheets")
 pdf_files = st.file_uploader("Choose your PDF run sheet(s)", type=["pdf"], accept_multiple_files=True)
 
 st.subheader("3. Options")
-enable_trello = st.checkbox("🔗 Enable Trello Search Links for Placement Guides (Wellington Beta test)")
+enable_trello = st.checkbox("Enable Trello Search Links for Placement Guides (Wellington Beta test)")
 
 
 def extract_pdf_text(uploaded_file):
@@ -190,7 +190,13 @@ class CompactRunSheetFPDF(FPDF):
 
         # Col 0: Campaign Title & Notes
         self.set_font("Helvetica", "B", 8)
-        self.set_text_color(30, 41, 59)
+        
+        # Make the text blue if it has a URL
+        if job_url:
+            self.set_text_color(37, 99, 235) # A nice clickable blue
+        else:
+            self.set_text_color(30, 41, 59)
+            
         self.multi_cell(col_w[0], 4, cell_texts[0], border=0)
         y_col0 = self.get_y()
         
@@ -282,7 +288,8 @@ class CompactRunSheetFPDF(FPDF):
                     # Add Trello search link prompt if toggled and applicable
                     if enable_trello and job_id and "placement guide" in note_txt.lower():
                         job_url = f"https://trello.com/search?q={job_id}"
-                        full_camp += "\n🔗 (Tap to Search Trello)"
+                        # Using standard text characters instead of unicode emoji
+                        full_camp += "\n>>> (Tap to Search Trello) <<<"
 
                 is_maintain_blue = (j['action'] == "MAINTAIN" and "max a0" in media_txt.lower())
                 
