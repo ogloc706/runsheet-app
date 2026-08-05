@@ -4,6 +4,7 @@ import re
 import io
 import zipfile
 import pypdf
+import urllib.parse
 from fpdf import FPDF
 
 st.set_page_config(page_title="Run Sheet Route Optimizer", layout="centered")
@@ -116,9 +117,31 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
 
 def parse_job_block(lines):
     first_line = lines[0]
-    match = re.match(r'^([A-Z]{3,5}\d{5,8})(.*)', first_line)
-    job_id = match.group(1) if match else ""
-    rest_first = match.group(2).strip() if match else first_line
+    
+    # 1. Clean the job ID from the front of the string so the campaign title stays neat
+    match = re.match(r'^([A-Za-z]{3,5}\d{5,8}[A-Za-z]?)(.*)', first_line)
+    if match:
+        rest_first = match.group(2).strip()
+    else:
+        rest_first = first_line
+        
+    # 2. Robust Job ID Extractor: Strips internal 'Q' or 'I' tags
+    clean_id = ""
+    potential_ids = re.findall(r'\b[A-Za-z]{3,5}\d{5,8}[A-Za-z]?\b', first_line)
+    for m in potential_ids:
+        cand = m.upper()
+        # Strip 'Q' or 'I' from the start
+        if cand.startswith('Q') or cand.startswith('I'):
+            if re.match(r'^[A-Z]{2,4}\d{5,8}[A-Z]?$', cand[1:]):
+                cand = cand[1:]
+        # Strip 'Q' or 'I' from the end
+        if cand.endswith('Q') or cand.endswith('I'):
+            if re.match(r'^[A-Z]{2,4}\d{5,8}$', cand[:-1]):
+                cand = cand[:-1]
+        # Validate that we are left with a true Job ID (e.g. ABU105572)
+        if re.match(r'^[A-Z]{2,4}\d{5,8}$', cand):
+            clean_id = cand
+            break
     
     media = ""
     notes = []
@@ -149,7 +172,7 @@ def parse_job_block(lines):
     note_text = " | ".join(notes)
     
     return {
-        'job_id': job_id,
+        'job_id': clean_id,
         'title': campaign_title,
         'media': media,
         'note': note_text,
@@ -193,14 +216,14 @@ class CompactRunSheetFPDF(FPDF):
         
         # Make the text blue if it has a URL
         if job_url:
-            self.set_text_color(37, 99, 235) # A nice clickable blue
+            self.set_text_color(37, 99, 235) # Clickable blue
         else:
             self.set_text_color(30, 41, 59)
             
         self.multi_cell(col_w[0], 4, cell_texts[0], border=0)
         y_col0 = self.get_y()
         
-        # Overlay the clickable Trello link if it exists
+        # Overlay the clickable Trello link
         if job_url:
             self.link(x_start, y_start, col_w[0], y_col0 - y_start, job_url)
 
@@ -285,10 +308,15 @@ class CompactRunSheetFPDF(FPDF):
                 if note_txt:
                     full_camp += f"\n[!] {note_txt}"
                     
-                    # Add Trello search link prompt if toggled and applicable
-                    if enable_trello and job_id and "placement guide" in note_txt.lower():
-                        job_url = f"https://trello.com/search?q={job_id}"
-                        # Using standard text characters instead of unicode emoji
+                    # Generate Trello Search Link
+                    if enable_trello and "placement guide" in note_txt.lower():
+                        # Search by clean Job ID if found, otherwise fallback to the Campaign Name
+                        if job_id:
+                            safe_query = urllib.parse.quote(job_id)
+                        else:
+                            safe_query = urllib.parse.quote(title_txt)
+                            
+                        job_url = f"https://trello.com/search?q={safe_query}"
                         full_camp += "\n>>> (Tap to Search Trello) <<<"
 
                 is_maintain_blue = (j['action'] == "MAINTAIN" and "max a0" in media_txt.lower())
@@ -366,7 +394,6 @@ if st.button("🚀 Process & Re-order PDFs", type="primary"):
                         csv_mapping = get_mapping_for_pdf(df, pdf_file.name, pdf_text)
                         sorted_blocks = parse_and_sort_pdf(pdf_text, csv_mapping)
                         
-                        # Pass the toggle state into the PDF generator
                         pdf_bytes = generate_compact_pdf(sorted_blocks, pdf_file.name, enable_trello)
                         
                         output_name = f"Optimized_{pdf_file.name}"
