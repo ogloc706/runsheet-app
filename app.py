@@ -41,6 +41,19 @@ def clean_txt(s):
         s = s.replace(orig, repl)
     return s.encode('latin-1', 'replace').decode('latin-1')
 
+def create_smart_trello_query(title):
+    """Cleans the campaign title to make Trello's global search work flawlessly."""
+    # 1. Remove anything inside parentheses or square brackets
+    q = re.sub(r'\(.*?\)', '', title)
+    q = re.sub(r'\[.*?\]', '', q)
+    # 2. Chop off everything after a pipe | or dash -
+    q = re.split(r'\||-', q)[0]
+    # 3. Remove all non-alphanumeric characters (keep spaces)
+    q = re.sub(r'[^a-zA-Z0-9\s]', '', q)
+    # 4. Strip extra spaces and grab the first 4 words for a broad, clean match
+    words = q.split()[:4]
+    return " ".join(words)
+
 
 def get_mapping_for_pdf(df, pdf_filename, pdf_text):
     code_col = next((c for c in df.columns if str(c).strip().lower() in ['code', 'site code', 'sitecode', 'site_code', 'id']), df.columns[1])
@@ -118,7 +131,6 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
 def parse_job_block(lines):
     first_line = lines[0]
     
-    # 1. Clean the Job ID: Group 1 catches the optional 'I' or 'Q', Group 2 catches the true ID
     match = re.match(r'^([QIqi]?)([A-Za-z]{2,4}\d{5,8})(.*)', first_line)
     
     clean_id = ""
@@ -201,14 +213,14 @@ class CompactRunSheetFPDF(FPDF):
         
         # Make the text blue if it has a URL
         if job_url:
-            self.set_text_color(37, 99, 235) # Clickable blue
+            self.set_text_color(37, 99, 235) 
         else:
             self.set_text_color(30, 41, 59)
             
         self.multi_cell(col_w[0], 4, cell_texts[0], border=0)
         y_col0 = self.get_y()
         
-        # Overlay the clickable Trello link
+        # Overlay the clickable link
         if job_url:
             self.link(x_start, y_start, col_w[0], y_col0 - y_start, job_url)
 
@@ -225,9 +237,9 @@ class CompactRunSheetFPDF(FPDF):
         self.set_xy(x_start + col_w[0] + col_w[1], y_start)
         self.set_font("Helvetica", "B", 8)
         if is_maintain_blue:
-            self.set_text_color(29, 78, 216) # Blue
+            self.set_text_color(29, 78, 216) 
         else:
-            self.set_text_color(21, 128, 61) # Green
+            self.set_text_color(21, 128, 61) 
         self.cell(col_w[2], 4.5, cell_texts[2], align="C")
 
         # Col 3: Size
@@ -244,7 +256,6 @@ class CompactRunSheetFPDF(FPDF):
 
         self.set_auto_page_break(True, margin=15)
 
-        # Row Bottom Border Line
         self.set_xy(x_start, max_y)
         self.set_draw_color(226, 232, 240)
         self.line(x_start, max_y, x_start + sum(col_w), max_y)
@@ -255,19 +266,16 @@ class CompactRunSheetFPDF(FPDF):
         if self.get_y() + estimated_block_h > 270:
             self.add_page()
 
-        # 1. Dark Navy Site Header Bar
         self.set_fill_color(30, 41, 59)
         self.set_text_color(255, 255, 255)
         self.set_font("Helvetica", "B", 9.5)
         self.cell(0, 6, f" {clean_txt(site_header)}", fill=True, ln=1)
 
-        # 2. Location description
         if sub_str:
             self.set_text_color(71, 85, 105)
             self.set_font("Helvetica", "I", 8)
             self.cell(0, 4.5, f" Location: {clean_txt(sub_str)}", ln=1)
 
-        # 3. 5-Column Table
         if jobs:
             col_w = [75, 55, 22, 25, 13]
             
@@ -292,10 +300,11 @@ class CompactRunSheetFPDF(FPDF):
                 if note_txt:
                     full_camp += f"\n[!] {note_txt}"
                     
-                    # Generate Trello Search Link
                     if enable_trello and "placement guide" in note_txt.lower():
-                        # We exclusively use the Campaign Title (title_txt) for the Trello search
-                        safe_query = urllib.parse.quote(title_txt)
+                        # Use the smart query cleaner
+                        smart_query = create_smart_trello_query(title_txt)
+                        safe_query = urllib.parse.quote(smart_query)
+                        
                         job_url = f"https://trello.com/search?q={safe_query}"
                         full_camp += "\n>>> (Tap to Search Trello) <<<"
 
