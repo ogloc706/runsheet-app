@@ -285,7 +285,6 @@ class CompactRunSheetFPDF(FPDF):
                 title_txt = clean_txt(j['title'])
                 note_txt = clean_txt(j['note'])
                 media_txt = clean_txt(j['media'])
-                job_id = j['job_id']
                 
                 full_camp = title_txt
                 job_url = None
@@ -295,11 +294,8 @@ class CompactRunSheetFPDF(FPDF):
                     
                     # Generate Trello Search Link
                     if enable_trello and "placement guide" in note_txt.lower():
-                        if job_id:
-                            safe_query = urllib.parse.quote(job_id)
-                        else:
-                            safe_query = urllib.parse.quote(title_txt)
-                            
+                        # We exclusively use the Campaign Title (title_txt) for the Trello search
+                        safe_query = urllib.parse.quote(title_txt)
                         job_url = f"https://trello.com/search?q={safe_query}"
                         full_camp += "\n>>> (Tap to Search Trello) <<<"
 
