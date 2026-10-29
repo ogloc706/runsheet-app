@@ -41,19 +41,6 @@ def clean_txt(s):
         s = s.replace(orig, repl)
     return s.encode('latin-1', 'replace').decode('latin-1')
 
-def create_smart_trello_query(title):
-    """Cleans the campaign title to make Trello's global search work flawlessly."""
-    # 1. Remove anything inside parentheses or square brackets
-    q = re.sub(r'\(.*?\)', '', title)
-    q = re.sub(r'\[.*?\]', '', q)
-    # 2. Chop off everything after a pipe | or dash -
-    q = re.split(r'\||-', q)[0]
-    # 3. Remove all non-alphanumeric characters (keep spaces)
-    q = re.sub(r'[^a-zA-Z0-9\s]', '', q)
-    # 4. Strip extra spaces and grab the first 4 words for a broad, clean match
-    words = q.split()[:4]
-    return " ".join(words)
-
 
 def get_mapping_for_pdf(df, pdf_filename, pdf_text):
     code_col = next((c for c in df.columns if str(c).strip().lower() in ['code', 'site code', 'sitecode', 'site_code', 'id']), df.columns[1])
@@ -129,16 +116,11 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
 
 
 def parse_job_block(lines):
+    # This smart parser accounts for missing spaces, line wraps, and new Bollard names from "Paste"
     first_line = lines[0]
-    
     match = re.match(r'^([QIqi]?)([A-Za-z]{2,4}\d{5,8})(.*)', first_line)
-    
-    clean_id = ""
-    if match:
-        clean_id = match.group(2).upper()
-        rest_first = match.group(3).strip()
-    else:
-        rest_first = first_line
+    clean_id = match.group(2).upper() if match else ""
+    rest_first = match.group(3).strip() if match else first_line
     
     media = ""
     notes = []
@@ -147,23 +129,49 @@ def parse_job_block(lines):
     qty = "1"
     title_parts = [rest_first] if rest_first else []
     
+    current_section = "title"
+    
     for l in lines[1:]:
         l_str = l.strip()
+        
+        action_match = re.match(r'^(install|maintain)(.*)', l_str, re.IGNORECASE)
+        
         if l_str.lower().startswith("media:"):
             media = l_str
+            current_section = "media"
         elif l_str.lower().startswith("note:"):
             notes.append(l_str)
+            current_section = "note"
         elif "cover up required" in l_str.lower():
             notes.append(l_str)
-        elif re.match(r'^(install|maintain)\b', l_str, re.IGNORECASE):
-            parts = l_str.split()
-            action = parts[0].upper()
-            if len(parts) >= 2:
-                size = parts[1]
-            if len(parts) >= 3:
-                qty = parts[2]
+            current_section = "note"
+        elif action_match:
+            current_section = "action"
+            action = action_match.group(1).upper()
+            rest_of_line = action_match.group(2).strip()
+            
+            if rest_of_line:
+                parts = rest_of_line.split()
+                # Check if the final word is a digit/number (the qty)
+                if re.match(r'^\d+$', parts[-1]):
+                    qty = parts[-1]
+                    size = " ".join(parts[:-1]) # everything else is the size (e.g., Bollard C)
+                else:
+                    size = rest_of_line
         else:
-            title_parts.append(l_str)
+            # Handle text that got wrapped onto a new line by Paste
+            if current_section == "title":
+                title_parts.append(l_str)
+            elif current_section == "media":
+                media += " " + l_str
+            elif current_section == "note":
+                notes[-1] += " " + l_str
+            elif current_section == "action":
+                # If a line wraps under the action, it's either part of the size or the qty
+                if re.match(r'^\d+$', l_str):
+                    qty = l_str
+                else:
+                    size += " " + l_str
             
     campaign_title = " ".join(title_parts)
     note_text = " | ".join(notes)
@@ -174,7 +182,7 @@ def parse_job_block(lines):
         'media': media,
         'note': note_text,
         'action': action,
-        'size': size,
+        'size': size.strip(),
         'qty': qty
     }
 
@@ -211,7 +219,6 @@ class CompactRunSheetFPDF(FPDF):
         # Col 0: Campaign Title & Notes
         self.set_font("Helvetica", "B", 8)
         
-        # Make the text blue if it has a URL
         if job_url:
             self.set_text_color(37, 99, 235) 
         else:
@@ -220,7 +227,6 @@ class CompactRunSheetFPDF(FPDF):
         self.multi_cell(col_w[0], 4, cell_texts[0], border=0)
         y_col0 = self.get_y()
         
-        # Overlay the clickable link
         if job_url:
             self.link(x_start, y_start, col_w[0], y_col0 - y_start, job_url)
 
@@ -301,9 +307,12 @@ class CompactRunSheetFPDF(FPDF):
                     full_camp += f"\n[!] {note_txt}"
                     
                     if enable_trello and "placement guide" in note_txt.lower():
-                        # Use the smart query cleaner
-                        smart_query = create_smart_trello_query(title_txt)
-                        safe_query = urllib.parse.quote(smart_query)
+                        q = re.sub(r'\(.*?\)', '', title_txt)
+                        q = re.sub(r'\[.*?\]', '', q)
+                        q = re.split(r'\||-', q)[0]
+                        q = re.sub(r'[^a-zA-Z0-9\s]', '', q)
+                        words = q.split()[:4]
+                        safe_query = urllib.parse.quote(" ".join(words))
                         
                         job_url = f"https://trello.com/search?q={safe_query}"
                         full_camp += "\n>>> (Tap to Search Trello) <<<"
@@ -320,7 +329,8 @@ def generate_compact_pdf(sorted_blocks, pdf_filename, enable_trello):
     pdf = CompactRunSheetFPDF(clean_title)
     pdf.add_page()
     
-    job_id_pattern = re.compile(r'^[A-Z]{3,5}\d{5,8}')
+    # Allow optional 'I' or 'Q' in front of the job IDs
+    job_id_pattern = re.compile(r'^[QIqi]?[A-Z]{2,4}\d{5,8}')
 
     for b in sorted_blocks:
         block_text = "\n".join(b['block_lines'])
@@ -336,11 +346,6 @@ def generate_compact_pdf(sorted_blocks, pdf_filename, enable_trello):
         for line in raw_lines[1:]:
             match = job_id_pattern.match(line)
             if match:
-                job_id = match.group(0)
-                rest = line[len(job_id):]
-                if rest and not rest.startswith(' '):
-                    line = f"{job_id} {rest}"
-
                 if current_job:
                     job_blocks.append(current_job)
                 current_job = [line]
