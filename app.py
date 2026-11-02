@@ -90,7 +90,9 @@ def find_csv_code(raw_code, csv_mapping):
 def parse_and_sort_pdf(pdf_text, csv_mapping):
     lines = pdf_text.strip().split('\n')
     headers_found = []
-    line_start_site_pattern = re.compile(r'^(?:\|\s*)?\b([A-HJ-Z][A-Z]{1,3}\d+[\d\.]*(?:\s*\([A-Z\s]+\))?)')
+    
+    # MULTI-CITY STRICT SITE PATTERN: Matches WLG, PB, AL, CHCK, CHC, AKK, AK
+    line_start_site_pattern = re.compile(r'^(?:\|\s*)?\b((?:WLG|PB|AL|CHCK|CHC|AKK|AK)\d+[\d\.]*(?:\s*\([A-Za-z\s]+\))?)\s*-')
     
     for i, line in enumerate(lines):
         match = line_start_site_pattern.search(line)
@@ -116,7 +118,6 @@ def parse_and_sort_pdf(pdf_text, csv_mapping):
 
 
 def parse_job_block(lines):
-    # This smart parser accounts for missing spaces, line wraps, and new Bollard names from "Paste"
     first_line = lines[0]
     match = re.match(r'^([QIqi]?)([A-Za-z]{2,4}\d{5,8})(.*)', first_line)
     clean_id = match.group(2).upper() if match else ""
@@ -152,14 +153,12 @@ def parse_job_block(lines):
             
             if rest_of_line:
                 parts = rest_of_line.split()
-                # Check if the final word is a digit/number (the qty)
                 if re.match(r'^\d+$', parts[-1]):
                     qty = parts[-1]
-                    size = " ".join(parts[:-1]) # everything else is the size (e.g., Bollard C)
+                    size = " ".join(parts[:-1]) 
                 else:
                     size = rest_of_line
         else:
-            # Handle text that got wrapped onto a new line by Paste
             if current_section == "title":
                 title_parts.append(l_str)
             elif current_section == "media":
@@ -167,7 +166,6 @@ def parse_job_block(lines):
             elif current_section == "note":
                 notes[-1] += " " + l_str
             elif current_section == "action":
-                # If a line wraps under the action, it's either part of the size or the qty
                 if re.match(r'^\d+$', l_str):
                     qty = l_str
                 else:
@@ -264,143 +262,4 @@ class CompactRunSheetFPDF(FPDF):
 
         self.set_xy(x_start, max_y)
         self.set_draw_color(226, 232, 240)
-        self.line(x_start, max_y, x_start + sum(col_w), max_y)
-        self.set_y(max_y + 0.5)
-
-    def draw_site_block(self, site_header, sub_str, jobs, enable_trello):
-        estimated_block_h = 8 + (6 if sub_str else 0) + (10 if jobs else 0)
-        if self.get_y() + estimated_block_h > 270:
-            self.add_page()
-
-        self.set_fill_color(30, 41, 59)
-        self.set_text_color(255, 255, 255)
-        self.set_font("Helvetica", "B", 9.5)
-        self.cell(0, 6, f" {clean_txt(site_header)}", fill=True, ln=1)
-
-        if sub_str:
-            self.set_text_color(71, 85, 105)
-            self.set_font("Helvetica", "I", 8)
-            self.cell(0, 4.5, f" Location: {clean_txt(sub_str)}", ln=1)
-
-        if jobs:
-            col_w = [75, 55, 22, 25, 13]
-            
-            self.set_fill_color(248, 250, 252)
-            self.set_draw_color(203, 213, 225)
-            self.set_text_color(71, 85, 105)
-            self.set_font("Helvetica", "B", 7.5)
-            
-            headers = ["CAMPAIGN", "MEDIA DETAILS", "ACTION", "SIZE", "QTY"]
-            for w, h in zip(col_w, headers):
-                self.cell(w, 4.5, h, border="B", fill=True)
-            self.ln()
-
-            for j in jobs:
-                title_txt = clean_txt(j['title'])
-                note_txt = clean_txt(j['note'])
-                media_txt = clean_txt(j['media'])
-                
-                full_camp = title_txt
-                job_url = None
-                
-                if note_txt:
-                    full_camp += f"\n[!] {note_txt}"
-                    
-                    if enable_trello and "placement guide" in note_txt.lower():
-                        q = re.sub(r'\(.*?\)', '', title_txt)
-                        q = re.sub(r'\[.*?\]', '', q)
-                        q = re.split(r'\||-', q)[0]
-                        q = re.sub(r'[^a-zA-Z0-9\s]', '', q)
-                        words = q.split()[:4]
-                        safe_query = urllib.parse.quote(" ".join(words))
-                        
-                        job_url = f"https://trello.com/search?q={safe_query}"
-                        full_camp += "\n>>> (Tap to Search Trello) <<<"
-
-                is_maintain_blue = (j['action'] == "MAINTAIN" and "max a0" in media_txt.lower())
-                
-                self.draw_row_fixed(col_w, [full_camp, media_txt, clean_txt(j['action']), clean_txt(j['size']), clean_txt(j['qty'])], is_maintain_blue, job_url)
-
-        self.ln(2.5)
-
-
-def generate_compact_pdf(sorted_blocks, pdf_filename, enable_trello):
-    clean_title = pdf_filename.replace('.pdf', '')
-    pdf = CompactRunSheetFPDF(clean_title)
-    pdf.add_page()
-    
-    # Allow optional 'I' or 'Q' in front of the job IDs
-    job_id_pattern = re.compile(r'^[QIqi]?[A-Z]{2,4}\d{5,8}')
-
-    for b in sorted_blocks:
-        block_text = "\n".join(b['block_lines'])
-        raw_lines = [l.strip(" |") for l in block_text.split('\n') if l.strip(" |")]
-        if not raw_lines:
-            continue
-
-        site_header_text = raw_lines[0]
-        sub_headers = []
-        job_blocks = []
-        current_job = None
-
-        for line in raw_lines[1:]:
-            match = job_id_pattern.match(line)
-            if match:
-                if current_job:
-                    job_blocks.append(current_job)
-                current_job = [line]
-            else:
-                if current_job:
-                    current_job.append(line)
-                else:
-                    sub_headers.append(line)
-
-        if current_job:
-            job_blocks.append(current_job)
-
-        sub_str = " | ".join(sub_headers) if sub_headers else ""
-        parsed_jobs = [parse_job_block(j_raw) for j_raw in job_blocks]
-        
-        pdf.draw_site_block(site_header_text, sub_str, parsed_jobs, enable_trello)
-
-    out_data = pdf.output(dest="S")
-    if isinstance(out_data, str):
-        out_data = out_data.encode("latin1")
-    return out_data
-
-
-if st.button("🚀 Process & Re-order PDFs", type="primary"):
-    if not csv_file:
-        st.error("Please upload your Master Route CSV file first.")
-    elif not pdf_files:
-        st.error("Please upload at least one PDF file.")
-    else:
-        with st.spinner("Processing files and optimizing routes..."):
-            df = pd.read_csv(csv_file)
-            
-            zip_buffer = io.BytesIO()
-            processed_count = 0
-            
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for pdf_file in pdf_files:
-                    try:
-                        pdf_text = extract_pdf_text(pdf_file)
-                        csv_mapping = get_mapping_for_pdf(df, pdf_file.name, pdf_text)
-                        sorted_blocks = parse_and_sort_pdf(pdf_text, csv_mapping)
-                        
-                        pdf_bytes = generate_compact_pdf(sorted_blocks, pdf_file.name, enable_trello)
-                        
-                        output_name = f"Optimized_{pdf_file.name}"
-                        zf.writestr(output_name, pdf_bytes)
-                        processed_count += 1
-                    except Exception as err:
-                        st.error(f"❌ Error processing `{pdf_file.name}`: {str(err)}")
-            
-            if processed_count > 0:
-                st.success(f"Successfully processed {processed_count} PDF(s)!")
-                st.download_button(
-                    label="📦 Download Optimized PDFs (.zip)",
-                    data=zip_buffer.getvalue(),
-                    file_name="Optimized_Run_Sheets.zip",
-                    mime="application/zip"
-                )
+        self.line(x_start, max_y, x_start +
