@@ -262,4 +262,9 @@ class CompactRunSheetFPDF(FPDF):
 
         self.set_xy(x_start, max_y)
         self.set_draw_color(226, 232, 240)
-        self.line(x_start, max_y, x_start +
+        self.line(x_start, max_y, x_start + sum(col_w), max_y)
+        self.set_y(max_y + 0.5)
+
+    def draw_site_block(self, site_header, sub_str, jobs, enable_trello):
+        estimated_block_h = 8 + (6 if sub_str else 0) + (10 if jobs else 0)
+        if self.get_y() + estimated_block_h >
